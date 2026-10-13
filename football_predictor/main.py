@@ -175,7 +175,7 @@ def main():
             home = match.get("主队", "")
             away = match.get("客队", "")
             league = match.get("联赛", "")
-            match_id = match.get("match_id", "") or match.get("场次编号", "")
+            match_id = match.get("match_id", "") or ""
 
             logger.info(f"[{idx + 1}/{len(schedule)}] 分析: {home} vs {away} ({league})")
 
