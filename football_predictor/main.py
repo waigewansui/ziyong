@@ -1,173 +1,307 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
-football_predictor 主入口
-足球赛事分析与预测工具
+足球竞猜智能推荐系统 - 主程序入口
 
-完整流水线：
-  1. load_config() → 读 config.yaml
-  2. get_schedule() → 体彩赛程 / 手动输入
-  3. 对每场循环：get_history() + get_intel() + analyze_match()
-  4. output_all() → 单场推荐 + 串关推荐
+功能：
+1. 加载配置（config.yaml + config.local.yaml 深度合并）
+2. 获取赛程（体彩 API / 本地文件 / 手动输入）
+3. 逐场分析（历史战绩 + 情报 + 多维度加权）
+4. 生成输出（MD / JSON / CSV + 串关推荐）
 
 用法：
-  python main.py                  # 用体彩当日赛程
-  python main.py --date 2026-10-14
-  python main.py --manual "001 意甲 2026-10-13 亚特兰大 威尼斯\n002 欧冠 2026-10-13 马竞 曼联"
+    python main.py                                    # 自动获取今日赛程
+    python main.py --date 2026-10-13                  # 指定日期
+    python main.py --file data/schedule.txt           # 从文件读赛程
+    python main.py --manual "001 意甲 ...\n011 欧冠 ..."  # 手动输入
+    python main.py --manual "..." --match-ids "54470920,54577210"
 """
-import argparse
-import logging
 import os
 import sys
-import time
-from pathlib import Path
+import logging
+import argparse
+import traceback
+from typing import Dict, Any
 
 import yaml
 
-BASE_DIR = Path(__file__).resolve().parent
+# ============ 路径修复（保证在任意目录下都能找到项目根） ============
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+os.chdir(BASE_DIR)
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
 
-log = logging.getLogger("main")
+# ============ 导入项目模块 ============
+from modules.fetch_schedule import get_schedule
+from modules.fetch_history import get_history
+from modules.fetch_intel import get_intel
+from modules.analyze import analyze_match
+from modules.output import output_all
 
 
+# ============ 日志配置 ============
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("main")
+
+
+# ============ 配置加载 ============
 def _deep_merge(base: dict, override: dict) -> dict:
-    """递归合并：override 覆盖 base，dict 递归、非 dict 直接替换"""
-    for k, v in override.items():
-        if k in base and isinstance(base[k], dict) and isinstance(v, dict):
-            _deep_merge(base[k], v)
+    """
+    递归合并两个 dict（override 覆盖 base 的同名键）
+    - dict 类型：递归合并
+    - 其他类型：override 直接替换 base
+    """
+    result = dict(base)
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = _deep_merge(result[key], value)
         else:
-            base[k] = v
-    return base
+            result[key] = value
+    return result
 
 
-def load_config() -> dict:
-    """加载配置：config.yaml + config.local.yaml（若存在则覆盖）"""
-    cfg_path = BASE_DIR / "config.yaml"
-    with open(cfg_path, "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f) or {}
+def load_config(path: str = None) -> Dict[str, Any]:
+    """
+    加载配置：
+    1. 先读 config.yaml
+    2. 若存在 config.local.yaml，深度合并覆盖（用于本地 secrets）
+    """
+    if path is None:
+        path = os.path.join(BASE_DIR, "config.yaml")
 
-    local_path = BASE_DIR / "config.local.yaml"
-    if local_path.exists():
+    cfg = {}
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+        logger.info(f"已加载配置: {path}")
+    else:
+        logger.warning(f"配置文件不存在: {path}，使用默认配置")
+
+    local_path = os.path.join(BASE_DIR, "config.local.yaml")
+    if os.path.exists(local_path):
         with open(local_path, "r", encoding="utf-8") as f:
             local_cfg = yaml.safe_load(f) or {}
-        _deep_merge(cfg, local_cfg)
-        log.info("已合并 config.local.yaml")
+        cfg = _deep_merge(cfg, local_cfg)
+        logger.info(f"已合并本地配置: {local_path}")
 
     return cfg
 
 
-def main():
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+# ============ 命令行参数 ============
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="足球竞猜智能推荐系统",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    log = logging.getLogger("main")
+    parser.add_argument("--date", type=str, default=None,
+                        help="日期 YYYY-MM-DD，默认今天")
+    parser.add_argument("--file", type=str, default=None,
+                        help="赛程文件路径（txt/csv/json/excel）")
+    parser.add_argument("--manual", type=str, default=None,
+                        help="手动输入赛程（每行一场，支持字面量 \\n）")
+    parser.add_argument("--match-ids", type=str, default=None,
+                        help="逗号分隔的 match_id，会按顺序赋给每场比赛")
+    parser.add_argument("--config", type=str, default=None,
+                        help="配置文件路径，默认 config.yaml")
+    return parser.parse_args()
 
-    # ---------- 参数 ----------
-    parser = argparse.ArgumentParser(description="足球竞猜分析")
-    parser.add_argument("--date", help="比赛日期 YYYY-MM-DD")
-    parser.add_argument("--manual", help="手动输入赛程文本 (\\n 分隔)")
-    parser.add_argument("--file", help="本地赛程文件 (.csv/.xlsx/.txt)")
-    parser.add_argument("--match-ids",
-                        help="懂球帝 match_id 列表, 逗号分隔 (与 schedule 行数一一对应)")
-    args = parser.parse_args()
 
-    # ---------- 载入模块 ----------
-    from modules.fetch_schedule import get_schedule
-    from modules.fetch_history import get_history
-    from modules.fetch_intel import get_intel
-    from modules.analyze import analyze_match
-    from modules.output import output_all
+# ============ 赛程解析 ============
+def _apply_match_ids(schedule, match_ids_str: str):
+    """把 --match-ids 按顺序赋给赛程里的每场比赛"""
+    if not match_ids_str or schedule is None or schedule.empty:
+        return schedule
+    ids = [x.strip() for x in match_ids_str.split(",") if x.strip()]
+    if "match_id" not in schedule.columns:
+        schedule = schedule.copy()
+        schedule["match_id"] = ""
+    for i, mid in enumerate(ids):
+        if i < len(schedule):
+            schedule.at[schedule.index[i], "match_id"] = mid
+    return schedule
 
-    # ---------- 配置 ----------
-    cfg = load_config()
-    fd_token = cfg.get("football_data_token", "")
-    output_dir = str(BASE_DIR / cfg.get("output", {}).get("dir", "output"))
-    min_conf = cfg.get("parlay", {}).get("min_confidence", 0.55)
-    max_res = cfg.get("parlay", {}).get("max_results", 20)
 
-    print("=" * 60)
-    print("  Football Predictor - 足球赛事分析与预测")
-    print("=" * 60)
-    print(f"输出目录: {output_dir}")
-    print(f"串关阈值: 置信度 ≥ {min_conf:.0%}, 最多 {max_res} 注")
+# ============ 主流程 ============
+def main():
+    args = parse_args()
 
-    # ---------- 1. 赛程 ----------
-    print("\n[1/4] 获取赛程...")
+    # ---------- 加载配置 ----------
+    logger.info("=" * 60)
+    logger.info("足球竞猜智能推荐系统 v1.0")
+    logger.info("=" * 60)
+
+    config = load_config(args.config)
+    fd_token = config.get("football_data_token", "")
+    if fd_token:
+        logger.info(f"football_data_token: 已加载（{fd_token[:8]}...）")
+    else:
+        logger.warning("football_data_token 未配置，football-data 降级可能失效")
+
+    # ---------- 步骤 1：获取赛程 ----------
+    logger.info("-" * 60)
+    logger.info("步骤 1/4: 获取赛程")
+    logger.info("-" * 60)
+
     schedule = get_schedule(
         date=args.date,
         filepath=args.file,
         manual_text=args.manual,
     )
-    if schedule.empty:
-        log.error("未获取到任何赛程，退出")
+
+    if schedule is None or schedule.empty:
+        logger.error("赛程为空，退出")
         sys.exit(1)
-    print(f"  → 共 {len(schedule)} 场")
 
-    # 懂球帝 match_id 映射（可选）
-    match_ids = []
-    if args.match_ids:
-        match_ids = [m.strip() for m in args.match_ids.split(",") if m.strip()]
+    # 应用 match_id
+    schedule = _apply_match_ids(schedule, args.match_ids)
 
-    # ---------- 2-3. 逐场分析 ----------
-    print(f"\n[2/4] 逐场分析 (history + intel + analyze)...")
+    logger.info(f"共获取 {len(schedule)} 场比赛")
+    for _, row in schedule.iterrows():
+        logger.info(
+            f"  {row.get('场次编号', '?')} | {row.get('联赛', '?')} | "
+            f"{row.get('主队', '?')} vs {row.get('客队', '?')}"
+        )
+
+    # ---------- 步骤 2：逐场分析 ----------
+    logger.info("-" * 60)
+    logger.info("步骤 2/4: 逐场分析")
+    logger.info("-" * 60)
+
     results = []
-    total = len(schedule)
-
-    for idx, (_, row) in enumerate(schedule.iterrows()):
-        home = row.get("主队", "")
-        away = row.get("客队", "")
-        league = row.get("联赛", "")
-        match = row.to_dict()
-
-        print(f"\n  [{idx+1}/{total}] {home} vs {away} ({league})")
-
-        # match_id 可选传入（加速 + 避免自动搜索失败）
-        mid = match_ids[idx] if idx < len(match_ids) else None
-
+    for idx, match in schedule.iterrows():
         try:
-            t0 = time.time()
-            history = get_history(home, away, football_data_token=fd_token)
-            intel = get_intel(home, away, league,
-                              match_id=mid,
-                              football_data_token=fd_token)
-            r = analyze_match(match, history, intel)
-            elapsed = time.time() - t0
-            print(f"    → {r['胜平负推荐']} "
-                  f"({r['胜平负概率']['胜']:.0%}/{r['胜平负概率']['平']:.0%}/{r['胜平负概率']['负']:.0%}) "
-                  f"置信度={r['置信度']:.2%}  [{elapsed:.1f}s]")
-            results.append(r)
+            home = match.get("主队", "")
+            away = match.get("客队", "")
+            league = match.get("联赛", "")
+            match_id = match.get("match_id", "") or match.get("场次编号", "")
+
+            logger.info(f"[{idx + 1}/{len(schedule)}] 分析: {home} vs {away} ({league})")
+
+            # 1. 获取历史战绩
+            history = get_history(
+                home, away,
+                football_data_token=fd_token,
+            ) or {}
+
+            # 2. 获取情报
+            intel = get_intel(
+                home, away, league,
+                match_id=match_id,
+                football_data_token=fd_token,
+            ) or {}
+
+            # ---------- ✅ 数据补齐：从 intel 补全 history ----------
+            if intel:
+                intel_recent = intel.get("recent", {}) or {}
+
+                # 补主队近绩
+                if not history.get("home_recent") and intel_recent.get("home"):
+                    history["home_recent"] = intel_recent["home"]
+                    logger.info(f"  ↳ 从懂球帝补齐主队近绩: {len(intel_recent['home'])} 场")
+                elif not history.get("home_recent"):
+                    logger.warning(f"  ↳ 主队近绩为空，且懂球帝无数据")
+
+                # 补客队近绩
+                if not history.get("away_recent") and intel_recent.get("away"):
+                    history["away_recent"] = intel_recent["away"]
+                    logger.info(f"  ↳ 从懂球帝补齐客队近绩: {len(intel_recent['away'])} 场")
+                elif not history.get("away_recent"):
+                    logger.warning(f"  ↳ 客队近绩为空，且懂球帝无数据")
+
+                # 补 H2H
+                if not history.get("h2h") and intel.get("h2h"):
+                    history["h2h"] = intel["h2h"]
+                    logger.info(f"  ↳ 从懂球帝补齐 H2H: {intel['h2h'].get('total', 0)} 场")
+
+            # 3. 多维度分析
+            result = analyze_match(match.to_dict(), history, intel)
+            results.append(result)
+
+            # 4. 日志输出推荐
+            wdl_prob = result.get("胜平负概率", {})
+            logger.info(
+                f"  ✓ 推荐: {result['胜平负推荐']} "
+                f"(胜{wdl_prob.get('胜', 0):.1%}/平{wdl_prob.get('平', 0):.1%}/负{wdl_prob.get('负', 0):.1%}) | "
+                f"比分={result['比分推荐']} 让球={result['让球推荐']} "
+                f"总进球={result['总进球推荐']} 半全场={result['半全场推荐']} | "
+                f"置信度={result['置信度']:.2%}"
+            )
+
         except Exception as e:
-            log.error(f"    → 分析失败: {e}", exc_info=True)
+            logger.error(f"  ✗ 分析失败: {match.get('主队')} vs {match.get('客队')} - {e}")
+            logger.debug(traceback.format_exc())
             continue
 
     if not results:
-        log.error("全部场次分析失败")
+        logger.error("所有场次分析失败，退出")
         sys.exit(1)
 
-    # ---------- 4. 输出 ----------
-    print(f"\n[3/4] 生成输出文件...")
-    summary = output_all(results, output_dir=output_dir)
-    print(f"  → {summary}")
+    logger.info(f"分析完成，成功 {len(results)}/{len(schedule)} 场")
 
-    print(f"\n[4/4] 完成！输出文件在: {output_dir}/")
-    print("=" * 60)
+    # ---------- 步骤 3：生成输出 ----------
+    logger.info("-" * 60)
+    logger.info("步骤 3/4: 生成输出文件")
+    logger.info("-" * 60)
 
-    # ---------- 控制台预览 ----------
-    print("\n📊 单场推荐预览：")
-    print("-" * 70)
-    print(f"{'场次':<6} {'对阵':<28} {'胜平负':<14} {'置信度':<8} {'数据源'}")
-    print("-" * 70)
+    output_dir = config.get("output", {}).get("dir", "output")
+    if not os.path.isabs(output_dir):
+        output_dir = os.path.join(BASE_DIR, output_dir)
+
+    try:
+        summary = output_all(results, output_dir=output_dir)
+        logger.info(f"输出摘要: {summary}")
+    except Exception as e:
+        logger.error(f"输出失败: {e}")
+        logger.debug(traceback.format_exc())
+        summary = {}
+
+    # ---------- 步骤 4：控制台预览 ----------
+    logger.info("-" * 60)
+    logger.info("步骤 4/4: 控制台预览")
+    logger.info("-" * 60)
+
+    logger.info("")
+    logger.info("=" * 100)
+    logger.info(f"{'场次':<6} {'对阵':<30} {'胜平负':<8} {'比分':<8} {'让球':<8} {'总进球':<8} {'半全场':<8} {'置信度':<8}")
+    logger.info("-" * 100)
     for r in results:
-        wdl = r.get("胜平负概率", {})
-        top_p = max(wdl.values()) if wdl else 0
-        print(
-            f"{r.get('场次编号',''):<6} "
-            f"{r.get('对阵',''):<28} "
-            f"{r.get('胜平负推荐','')}({top_p:.0%}){'':<8} "
-            f"{r.get('置信度',0):.2%}   "
-            f"{r.get('数据源','')}"
+        logger.info(
+            f"{r.get('场次编号', ''):<6} "
+            f"{r.get('对阵', '')[:28]:<30} "
+            f"{r.get('胜平负推荐', ''):<8} "
+            f"{r.get('比分推荐', ''):<8} "
+            f"{r.get('让球推荐', ''):<8} "
+            f"{r.get('总进球推荐', ''):<8} "
+            f"{r.get('半全场推荐', ''):<8} "
+            f"{r.get('置信度', 0):<8.2%}"
         )
+    logger.info("=" * 100)
+
+    # 串关摘要
+    if summary.get("串关"):
+        logger.info("")
+        logger.info("串关推荐生成情况：")
+        for play_type, count in summary["串关"].items():
+            logger.info(f"  - {play_type}: {count} 注")
+    else:
+        logger.info("")
+        logger.info("本次未生成串关（置信度不足）")
+
+    logger.info("")
+    logger.info("=" * 60)
+    logger.info("完成！")
+    logger.info("=" * 60)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        logger.warning("用户中断")
+        sys.exit(130)
+    except Exception as e:
+        logger.error(f"程序异常退出: {e}")
+        logger.debug(traceback.format_exc())
+        sys.exit(1)

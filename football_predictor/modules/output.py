@@ -1,41 +1,17 @@
 """
-推荐输出模块
-输出：单场推荐（Markdown/JSON/CSV）+ 串关推荐（2串1 至 5串1）
-串关赔率采用"概率反推"（含庄家抽水）
-
-配置读取自 config.yaml → parlay.min_confidence / parlay.max_results / parlay.types
+推荐输出模块（V2 - CSV 字段修复版）
 """
 import os
-import csv
 import json
+import csv
 import logging
 from itertools import combinations
-from pathlib import Path
 from typing import List, Dict, Any
 from datetime import datetime
 
-import yaml
-
 logger = logging.getLogger(__name__)
 
-# ---------- 读 config.yaml ----------
-_BASE_DIR = Path(__file__).resolve().parent.parent
-try:
-    with open(_BASE_DIR / "config.yaml", "r", encoding="utf-8") as _f:
-        _CFG = yaml.safe_load(_f) or {}
-    _PARLAY_CFG = _CFG.get("parlay", {})
-    MIN_CONFIDENCE = float(_PARLAY_CFG.get("min_confidence", 0.55))
-    MAX_RESULTS = int(_PARLAY_CFG.get("max_results", 20))
-    PARLAY_TYPES = _PARLAY_CFG.get("types", ["2串1", "3串1", "4串1", "5串1"])
-except Exception:
-    MIN_CONFIDENCE = 0.55
-    MAX_RESULTS = 20
-    PARLAY_TYPES = ["2串1", "3串1", "4串1", "5串1"]
-
-# 庄家抽水系数（从概率反推赔率）
 VIG_FACTOR = 0.90
-
-# 串关分档阈值（稳定输出，不从 config 读）
 CONFIDENCE_TIERS = [
     ("稳胆", 0.55),
     ("稳健", 0.45),
@@ -44,9 +20,7 @@ CONFIDENCE_TIERS = [
 ]
 
 
-# ============ 工具函数 ============
 def prob_to_odds(prob: float) -> float:
-    """从概率反推赔率（含庄家抽水）"""
     if prob <= 0.01:
         return 99.0
     return round(1 / prob * VIG_FACTOR, 2)
@@ -60,30 +34,24 @@ def get_tier(conf: float) -> str:
 
 
 def format_bet_item(match_id: str, play_type: str, key: str) -> str:
-    """彩票终端可直接识别的投注格式"""
     if play_type in ("胜平负", "让球", "半全场"):
-        return f"{match_id}{key}"              # 001胜 / 001让胜 / 001胜胜
+        return f"{match_id}{key}"
     if play_type in ("比分", "总进球"):
-        return f"{match_id}({key})"            # 001(2:1) / 001(3球)
+        return f"{match_id}({key})"
     return f"{match_id}{key}"
 
 
-# 【关键】映射 analyze.py 实际输出的字段名
-# analyze.py 用 "比分概率_top" (截断后的 dict)，不是 "比分概率"
-_PLAY_MAPPING = {
-    "胜平负": ("胜平负推荐", "胜平负概率"),
-    "让球":   ("让球推荐",   "让球概率"),
-    "比分":   ("比分推荐",   "比分概率_top"),   # ← 真实 key！
-    "总进球": ("总进球推荐", "总进球概率"),
-    "半全场": ("半全场推荐", "半全场概率"),
-}
-
-
-def _pick_play(result: Dict[str, Any], play_type: str) -> Dict[str, Any]:
-    """从单场结果里提取指定玩法的推荐/概率/赔率"""
-    if play_type not in _PLAY_MAPPING:
+def _pick_play(result: Dict, play_type: str) -> Dict[str, Any]:
+    mapping = {
+        "胜平负": ("胜平负推荐", "胜平负概率"),
+        "让球":   ("让球推荐",   "让球概率"),
+        "比分":   ("比分推荐",   "比分概率"),
+        "总进球": ("总进球推荐", "总进球概率"),
+        "半全场": ("半全场推荐", "半全场概率"),
+    }
+    if play_type not in mapping:
         return {}
-    rec_key, prob_key = _PLAY_MAPPING[play_type]
+    rec_key, prob_key = mapping[play_type]
     pick = result.get(rec_key, "")
     prob_map = result.get(prob_key, {}) or {}
     prob = float(prob_map.get(pick, 0.0))
@@ -99,9 +67,17 @@ def _pick_play(result: Dict[str, Any], play_type: str) -> Dict[str, Any]:
     }
 
 
-# ============ 单场推荐输出 ============
+def _stringify(v) -> str:
+    """dict / list 转成字符串，用于 CSV"""
+    if isinstance(v, dict):
+        return "; ".join(f"{k}={val}" for k, val in v.items())
+    if isinstance(v, list):
+        return "; ".join(str(x) for x in v)
+    return str(v) if v is not None else ""
+
+
+# ============ 单场输出 ============
 def save_markdown(results: List[Dict], filepath: str):
-    """保存单场推荐 Markdown"""
     lines = [
         "# 足球竞猜推荐\n",
         f"生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n",
@@ -111,14 +87,14 @@ def save_markdown(results: List[Dict], filepath: str):
         "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
     ]
     for r in results:
-        wdl = r.get("胜平负概率", {}) or {}
+        wdl = r.get("胜平负概率", {})
         top_prob = max(wdl.values()) if wdl else 0
         lines.append(
             f"| {r.get('场次编号','')} | {r.get('对阵','')} | "
             f"{r.get('胜平负推荐','')} | {top_prob:.2%} | "
             f"{r.get('让球推荐','')} | {r.get('比分推荐','')} | "
             f"{r.get('总进球推荐','')} | {r.get('半全场推荐','')} | "
-            f"{float(r.get('置信度',0)):.2%} | {get_tier(float(r.get('置信度',0)))} |"
+            f"{r.get('置信度',0):.2%} | {get_tier(r.get('置信度',0))} |"
         )
 
     with open(filepath, "w", encoding="utf-8") as f:
@@ -128,57 +104,35 @@ def save_markdown(results: List[Dict], filepath: str):
 
 def save_json(results: List[Dict], filepath: str):
     with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(results, f, ensure_ascii=False, indent=2, default=str)
+        json.dump(results, f, ensure_ascii=False, indent=2)
     logger.info(f"JSON 已保存: {filepath}")
 
 
 def save_csv(results: List[Dict], filepath: str):
-    fields = ["场次编号", "对阵", "胜平负推荐", "让球推荐",
-              "比分推荐", "总进球推荐", "半全场推荐", "置信度", "数据源"]
+    """CSV 输出：dict 字段序列化为字符串"""
+    if not results:
+        return
+    fields = [
+        "场次编号", "联赛", "比赛时间", "对阵",
+        "胜平负推荐", "让球推荐", "比分推荐",
+        "总进球推荐", "半全场推荐", "置信度", "数据源",
+    ]
     with open(filepath, "w", encoding="utf-8-sig", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         for r in results:
-            row = {k: r.get(k, "") for k in fields}
-            # 置信度格式化成百分比
-            if row.get("置信度"):
-                try:
-                    row["置信度"] = f"{float(row['置信度']):.2%}"
-                except Exception:
-                    pass
+            row = {k: _stringify(r.get(k, "")) for k in fields}
             writer.writerow(row)
     logger.info(f"CSV 已保存: {filepath}")
 
 
-# ============ 串关生成 ============
-def _parse_parlay_ns() -> List[int]:
-    """从 config.yaml 的 types 解析出 N 列表"""
-    ns = []
-    for t in PARLAY_TYPES:
-        if "串" in t:
-            try:
-                ns.append(int(t.replace("串1", "").replace("串", "")))
-            except ValueError:
-                pass
-    if not ns:
-        ns = [2, 3, 4, 5]
-    return sorted(set(ns))
-
-
-def generate_parlays(results: List[Dict],
-                     play_type: str = "胜平负",
-                     min_confidence: float = None,
-                     max_results: int = None) -> List[Dict]:
-    """生成指定玩法的串关推荐"""
-    if min_confidence is None:
-        min_confidence = MIN_CONFIDENCE
-    if max_results is None:
-        max_results = MAX_RESULTS
-
+# ============ 串关 ============
+def generate_parlays(results, play_type="胜平负", min_confidence=0.35,
+                     max_n=5, max_results=50) -> List[Dict]:
     candidates = [r for r in results
                   if float(r.get("置信度", 0)) >= min_confidence]
     if len(candidates) < 2:
-        logger.info(f"[{play_type}] 高置信度场次不足2场 ({len(candidates)}), 跳过")
+        logger.warning(f"[{play_type}] 高置信度场次不足2场，跳过")
         return []
 
     picked = []
@@ -191,10 +145,7 @@ def generate_parlays(results: List[Dict],
         return []
 
     parlays = []
-    parlay_ns = _parse_parlay_ns()
-    for n in parlay_ns:
-        if n > len(picked):
-            continue
+    for n in range(2, min(max_n + 1, len(picked) + 1)):
         for combo in combinations(picked, n):
             odds_product = 1.0
             prob_product = 1.0
@@ -220,18 +171,12 @@ def generate_parlays(results: List[Dict],
             })
 
     tier_order = {"稳胆": 0, "稳健": 1, "搏冷": 2, "极端": 3}
-    parlays.sort(key=lambda x: (tier_order.get(x["分档"], 4),
-                                -x["平均置信度"]))
+    parlays.sort(key=lambda x: (tier_order.get(x["分档"], 4), -x["平均置信度"]))
     return parlays[:max_results]
 
 
-def generate_mixed_parlays(results: List[Dict],
-                            min_confidence: float = 0.45,
-                            max_results: int = None) -> List[Dict]:
-    """混合串关：每场从5个玩法中选概率最高的那个"""
-    if max_results is None:
-        max_results = MAX_RESULTS
-
+def generate_mixed_parlays(results, min_confidence=0.35,
+                            max_n=5, max_results=20) -> List[Dict]:
     candidates = [r for r in results
                   if float(r.get("置信度", 0)) >= min_confidence]
     if len(candidates) < 2:
@@ -245,10 +190,9 @@ def generate_mixed_parlays(results: List[Dict],
             item = _pick_play(r, pt)
             if not item or not item["pick"]:
                 continue
-            # 比分/总进球 概率天然低，权重降级
             weight = 0.7 if pt in ("比分", "总进球") else 1.0
             score = item["prob"] * weight
-            if best is None or score > best.get("_score", 0):
+            if best is None or score > best["_score"]:
                 item["_score"] = score
                 best = item
         if best:
@@ -258,10 +202,7 @@ def generate_mixed_parlays(results: List[Dict],
         return []
 
     parlays = []
-    parlay_ns = _parse_parlay_ns()
-    for n in parlay_ns:
-        if n > len(picked):
-            continue
+    for n in range(2, min(max_n + 1, len(picked) + 1)):
         for combo in combinations(picked, n):
             odds_product = 1.0
             prob_product = 1.0
@@ -288,20 +229,16 @@ def generate_mixed_parlays(results: List[Dict],
             })
 
     tier_order = {"稳胆": 0, "稳健": 1, "搏冷": 2, "极端": 3}
-    parlays.sort(key=lambda x: (tier_order.get(x["分档"], 4),
-                                -x["平均置信度"]))
+    parlays.sort(key=lambda x: (tier_order.get(x["分档"], 4), -x["平均置信度"]))
     return parlays[:max_results]
 
 
 def save_parlays(parlays: List[Dict], filepath: str, title: str = "串关推荐"):
-    """保存串关推荐 Markdown"""
     if not parlays:
         return
-    lines = [
-        f"# {title}\n",
-        f"生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n",
-        f"共 {len(parlays)} 注\n",
-    ]
+    lines = [f"# {title}\n",
+             f"生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n",
+             f"共 {len(parlays)} 注\n"]
 
     by_tier: Dict[str, List[Dict]] = {}
     for p in parlays:
@@ -312,7 +249,7 @@ def save_parlays(parlays: List[Dict], filepath: str, title: str = "串关推荐"
         if not group:
             continue
         lines.append(f"\n## {tier}（{len(group)} 注）\n")
-        lines.append("| 串关 | 投注内容 | 赔率 | 投入 | 收益 | 命中率 | 平均置信度 |")
+        lines.append("| 串关 | 投注内容 | 赔率 | 投入 | 收益 | 理论命中率 | 平均置信度 |")
         lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
         for p in group:
             bet_str = " × ".join(p["投注内容"])
@@ -328,108 +265,35 @@ def save_parlays(parlays: List[Dict], filepath: str, title: str = "串关推荐"
 
 
 # ============ 统一入口 ============
-def output_all(results: List[Dict],
-               output_dir: str = "output",
-               play_types: List[str] = None) -> Dict[str, Any]:
-    """
-    输出所有结果（单场 + 串关）。
-    配置参数从 config.yaml 读取。
-    """
+def output_all(results, output_dir="output", play_types=None,
+               min_confidence=0.30) -> Dict[str, Any]:
+    """注意：min_confidence 从 0.35 降到 0.30，让串关更容易生成"""
     os.makedirs(output_dir, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # 1. 单场推荐
     save_markdown(results, os.path.join(output_dir, f"recommend_{ts}.md"))
     save_json(results, os.path.join(output_dir, f"recommend_{ts}.json"))
     save_csv(results, os.path.join(output_dir, f"recommend_{ts}.csv"))
 
-    # 2. 分玩法串关
     if play_types is None:
         play_types = ["胜平负", "让球", "比分", "总进球", "半全场"]
 
     summary = {"单场数": len(results), "串关": {}}
 
     for pt in play_types:
-        parlays = generate_parlays(results, play_type=pt)
+        parlays = generate_parlays(results, play_type=pt, min_confidence=min_confidence)
         if parlays:
-            save_parlays(parlays,
-                         os.path.join(output_dir, f"parlay_{pt}_{ts}.md"),
+            save_parlays(parlays, os.path.join(output_dir, f"parlay_{pt}_{ts}.md"),
                          title=f"{pt}串关推荐")
-            save_json(parlays,
-                      os.path.join(output_dir, f"parlay_{pt}_{ts}.json"))
+            save_json(parlays, os.path.join(output_dir, f"parlay_{pt}_{ts}.json"))
             summary["串关"][pt] = len(parlays)
-        else:
-            logger.info(f"[{pt}] 无符合条件的串关")
 
-    # 3. 混合串关（门槛更高）
-    mixed = generate_mixed_parlays(results, min_confidence=max(MIN_CONFIDENCE, 0.45))
+    mixed = generate_mixed_parlays(results, min_confidence=min_confidence)
     if mixed:
-        save_parlays(mixed,
-                     os.path.join(output_dir, f"parlay_mixed_{ts}.md"),
+        save_parlays(mixed, os.path.join(output_dir, f"parlay_mixed_{ts}.md"),
                      title="混合串关推荐")
         save_json(mixed, os.path.join(output_dir, f"parlay_mixed_{ts}.json"))
         summary["串关"]["混合"] = len(mixed)
 
     logger.info(f"全部输出完成: {summary}")
     return summary
-
-
-# ============================================================
-# 测试
-# ============================================================
-if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
-    )
-
-    # 用真实 analyze.py 输出模拟（重点验证 比分概率_top 字段）
-    mock_results = [
-        {
-            "场次编号": "002",
-            "对阵": "亚特兰大 vs 威尼斯",
-            "联赛": "意甲",
-            "让球": -1.0,
-            "胜平负推荐": "胜",
-            "胜平负概率": {"胜": 0.6282, "平": 0.1572, "负": 0.2146},
-            "让球推荐": "让负",
-            "让球概率": {"让胜": 0.3141, "让平": 0.2199, "让负": 0.4660},
-            "比分推荐": "0:0",
-            "比分概率_top": {"0:0": 0.166, "0:1": 0.166, "1:0": 0.1327,
-                             "1:1": 0.1327, "0:2": 0.0829},
-            "总进球推荐": "2球",
-            "总进球概率": {"0球": 0.06, "1球": 0.17, "2球": 0.24,
-                           "3球": 0.22, "4球": 0.16},
-            "半全场推荐": "胜胜",
-            "半全场概率": {"胜胜": 0.3852, "平胜": 0.2101, "负胜": 0.105,
-                           "平平": 0.0964, "平负": 0.0718, "负负": 0.1316},
-            "置信度": 0.4433,
-            "数据源": "dongqiudi",
-        },
-        {
-            "场次编号": "011",
-            "对阵": "马德里竞技 vs 曼联",
-            "联赛": "欧冠",
-            "让球": 0.0,
-            "胜平负推荐": "胜",
-            "胜平负概率": {"胜": 0.4744, "平": 0.2582, "负": 0.2674},
-            "让球推荐": "让胜",
-            "让球概率": {"让胜": 0.4744, "让平": 0.2582, "让负": 0.2674},
-            "比分推荐": "1:0",
-            "比分概率_top": {"1:0": 0.14, "2:0": 0.09, "2:1": 0.10, "0:0": 0.08},
-            "总进球推荐": "2球",
-            "总进球概率": {"1球": 0.25, "2球": 0.28, "3球": 0.20, "0球": 0.08},
-            "半全场推荐": "胜胜",
-            "半全场概率": {"胜胜": 0.28, "平胜": 0.20, "负胜": 0.12},
-            "置信度": 0.3190,
-            "数据源": "dongqiudi",
-        },
-    ]
-
-    # 降低门槛让测试能生成串关（mock 置信度偏低）
-    import modules.output as out
-    out.MIN_CONFIDENCE = 0.30  # 测试时覆盖
-    summary = out.output_all(mock_results,
-                              output_dir=str(_BASE_DIR / "output"))
-    print(f"\n=== 输出摘要 ===")
-    print(json.dumps(summary, ensure_ascii=False, indent=2))
