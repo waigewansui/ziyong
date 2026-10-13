@@ -1,6 +1,16 @@
 """
-多维度分析模块（V2 - 一致性修复版）
-核心改进：先定比分，其他维度全部从比分推导，保证 5 个维度方向一致
+多维度分析模块（V3 - 杯赛降级 + 主客场进球率版）
+
+核心逻辑：
+1. 三源加权算胜平负（历史 40% + 情报 30% + 赔率 30%）
+2. 从胜平负方向约束比分（避免维度矛盾）
+3. 从比分推导让球 / 总进球 / 半全场（5 维度一致性）
+
+V3 改进：
+- 杯赛（欧冠/欧联）无 ranking 时，用伤停 + 主场优势推断
+- 比分用"主队主场进球率 + 客队客场进球率"（不再主客各取一半）
+- 让球从 intel.odds 推断（赛程没让球时）
+- 真实欧赔提取（供 output 用）
 """
 import math
 import logging
@@ -45,7 +55,10 @@ def _parse_score(score) -> Tuple[int, int]:
     if score is None:
         return 0, 0
     if isinstance(score, (list, tuple)) and len(score) >= 2:
-        return int(score[0]), int(score[1])
+        try:
+            return int(score[0]), int(score[1])
+        except (ValueError, TypeError):
+            return 0, 0
     s = str(score).replace(":", "-").replace(" ", "")
     parts = s.split("-")
     if len(parts) >= 2:
@@ -119,9 +132,16 @@ def _h2h_from_team(h2h: dict, home: str) -> Tuple[float, float, float]:
     return my_win / total, my_draw / total, my_lose / total
 
 
-def _recent_rate(matches: List[dict]) -> Tuple[float, float, float]:
+def _recent_rate(matches) -> Tuple[float, float, float]:
+    if matches is None:
+        return 0.33, 0.33, 0.34
+    if hasattr(matches, "empty") and matches.empty:
+        return 0.33, 0.33, 0.34
+    if hasattr(matches, "iterrows"):
+        matches = [row.to_dict() for _, row in matches.iterrows()]
     if not matches:
         return 0.33, 0.33, 0.34
+
     w = d = l = 0
     for m in matches:
         r = _extract_result(m)
@@ -135,9 +155,16 @@ def _recent_rate(matches: List[dict]) -> Tuple[float, float, float]:
     return w / n, d / n, l / n
 
 
-def _recent_rate_reversed(matches: List[dict]) -> Tuple[float, float, float]:
+def _recent_rate_reversed(matches) -> Tuple[float, float, float]:
+    if matches is None:
+        return 0.33, 0.33, 0.34
+    if hasattr(matches, "empty") and matches.empty:
+        return 0.33, 0.33, 0.34
+    if hasattr(matches, "iterrows"):
+        matches = [row.to_dict() for _, row in matches.iterrows()]
     if not matches:
         return 0.33, 0.33, 0.34
+
     w = d = l = 0
     for m in matches:
         r = _extract_result(m)
@@ -166,8 +193,13 @@ def _extract_result(m: dict) -> str:
     return ""
 
 
-# ========== 维度2：情报 ==========
-def calc_intel_prob(intel: Dict[str, Any], home: str, away: str) -> Dict[str, float]:
+# ========== 维度2：情报（V3 杯赛降级） ==========
+def calc_intel_prob(intel: Dict[str, Any], home: str, away: str,
+                    league: str = "") -> Dict[str, float]:
+    """
+    情报维度概率
+    V3 改进：杯赛（欧冠/欧联）无 ranking 时用伤停 + 主场优势
+    """
     ranking = intel.get("ranking", {}) or {}
     home_rank = _safe_float(ranking.get("home_rank"))
     away_rank = _safe_float(ranking.get("away_rank"))
@@ -190,9 +222,24 @@ def calc_intel_prob(intel: Dict[str, Any], home: str, away: str) -> Dict[str, fl
 
     injury_score = max(-1.0, min(1.0, (away_inj - home_inj) / 5.0))
 
-    if rank_score == 0 and point_score == 0 and injury_score == 0:
+    has_ranking = (rank_score != 0) or (point_score != 0)
+    has_injury = injury_score != 0
+
+    # 完全无情报 → 中性
+    if not has_ranking and not has_injury:
         return {"胜": 0.33, "平": 0.33, "负": 0.34}
 
+    # 杯赛场景：只有伤停 → 主场优势 0.45 + 伤停影响
+    if not has_ranking and has_injury:
+        home_win = 0.45 + injury_score * 0.15
+        away_win = 0.35 - injury_score * 0.15
+        return _normalize({"胜": home_win, "平": 0.20, "负": away_win})
+
+    # 杯赛场景：完全无 ranking 也无伤停（应该是前面已返回）
+    if not has_ranking:
+        return {"胜": 0.42, "平": 0.24, "负": 0.34}
+
+    # 有 ranking → 原逻辑
     total_score = rank_score * 0.5 + point_score * 0.3 + injury_score * 0.2
     home_win = 0.40 + total_score * 0.30
     away_win = 0.40 - total_score * 0.30
@@ -251,7 +298,7 @@ def fuse_probabilities(hp, ip, op) -> Dict:
     }
 
 
-# ========== 让球（保留概率分布，用于后续置信度） ==========
+# ========== 让球 ==========
 def calc_handicap(wdl: Dict, handicap: float) -> Dict:
     h, d, a = wdl["胜"], wdl["平"], wdl["负"]
     if handicap < 0:
@@ -269,28 +316,92 @@ def calc_handicap(wdl: Dict, handicap: float) -> Dict:
     return {"让胜": h, "让平": d, "让负": a}
 
 
-# ========== 比分（带胜平负方向筛选） ==========
+# ========== 让球推断（从赔率） ==========
+def _extract_handicap_from_intel(intel: dict) -> float:
+    """从 intel.odds 推断竞彩让球盘口"""
+    odds = intel.get("odds", {}) or {}
+
+    avg = odds.get("avg", {}) or {}
+    now_euro = avg.get("now", {}) or {}
+    h = _safe_float(_pick(now_euro, "homeWin", "home", "h"))
+    a = _safe_float(_pick(now_euro, "awayWin", "away", "a"))
+
+    if h > 0 and a > 0:
+        if h < a:
+            return -1.0
+        else:
+            return 1.0
+
+    asia = odds.get("asia", [])
+    if isinstance(asia, list) and asia:
+        first = asia[0]
+        now = first.get("now", {}) or {}
+        draw_val = str(now.get("draw_value", "")).strip()
+        try:
+            magnitude = float(draw_val)
+            if magnitude > 0:
+                return -1.0
+        except (ValueError, TypeError):
+            pass
+
+    return -1.0
+
+
+# ========== 真实赔率提取 ==========
+def _extract_real_odds(intel: dict) -> Dict[str, float]:
+    """提取真实欧赔快照（avg.now）"""
+    odds = intel.get("odds", {}) or {}
+    avg = odds.get("avg", {}) or {}
+    now = avg.get("now", {}) or {}
+    return {
+        "胜": _safe_float(_pick(now, "homeWin", "home", "h")),
+        "平": _safe_float(_pick(now, "draw", "d")),
+        "负": _safe_float(_pick(now, "awayWin", "away", "a")),
+    }
+
+
+# ========== 比分（V3：主客场进球率） ==========
 def calc_score(history: Dict, wdl_recommendation: str = None) -> Dict[str, float]:
-    def avg(matches):
+    """
+    V3 改进：主队用主场进球率，客队用客场进球率
+    """
+    def avg_goals(matches, side="home"):
+        """side='home' 统计主队进球，side='away' 统计客队进球"""
+        if matches is None:
+            return 1.3
+        if hasattr(matches, "empty") and matches.empty:
+            return 1.3
+        if hasattr(matches, "iterrows"):
+            matches = [row.to_dict() for _, row in matches.iterrows()]
         if not matches:
-            return 1.2
+            return 1.3
+
         total, n = 0, 0
         for m in matches:
-            h, a = _parse_score(_pick(m, "score", "scoreStr", "ft_score"))
-            total += h + a
+            sc = _pick(m, "score", "scoreStr", "ft_score")
+            h, a = _parse_score(sc)
+            if side == "home":
+                total += h
+            else:
+                total += a
             n += 1
-        return max(0.5, total / max(1, n))
+        return max(0.8, total / max(1, n))
 
-    home_avg = avg(history.get("home_recent", [])) / 2
-    away_avg = avg(history.get("away_recent", [])) / 2
+    # 主队主场进球 + 客队客场进球
+    home_goals = avg_goals(history.get("home_recent", []), "home")
+    away_goals = avg_goals(history.get("away_recent", []), "away")
+
+    # 泊松 λ：主队 = 主场进球 × 1.1，客队 = 客场进球 × 0.9
+    lam_h = home_goals * 1.1
+    lam_a = away_goals * 0.9
 
     result = {}
     for h in range(6):
         for a in range(6):
-            p = poisson_probability(home_avg, h) * poisson_probability(away_avg, a)
+            p = poisson_probability(lam_h, h) * poisson_probability(lam_a, a)
             result[f"{h}:{a}"] = round(p, 4)
 
-    # ✅ 根据胜平负方向筛选
+    # 根据胜平负方向筛选
     if wdl_recommendation == "胜":
         filtered = {k: v for k, v in result.items()
                     if int(k.split(":")[0]) > int(k.split(":")[1])}
@@ -312,23 +423,61 @@ def calc_score(history: Dict, wdl_recommendation: str = None) -> Dict[str, float
     return filtered
 
 
-# ========== 总进球（保留概率分布） ==========
+# ========== 总进球 ==========
 def calc_total_goals(history: Dict) -> Dict[str, float]:
-    def avg(matches):
+    def avg_goals(matches):
+        if matches is None:
+            return 1.3
+        if hasattr(matches, "empty") and matches.empty:
+            return 1.3
+        if hasattr(matches, "iterrows"):
+            matches = [row.to_dict() for _, row in matches.iterrows()]
+        if not matches:
+            return 1.3
+        total, n = 0, 0
+        for m in matches:
+            sc = _pick(m, "score", "scoreStr", "ft_score")
+            h, a = _parse_score(sc)
+            total += h + a
+            n += 1
+        return max(0.8, total / max(1, n))
+
+    # 用主队主场进球率 + 客队客场进球率
+    def avg_home_goals(matches):
+        if matches is None or (hasattr(matches, "empty") and matches.empty):
+            return 1.2
+        if hasattr(matches, "iterrows"):
+            matches = [row.to_dict() for _, row in matches.iterrows()]
         if not matches:
             return 1.2
         total, n = 0, 0
         for m in matches:
             h, a = _parse_score(_pick(m, "score", "scoreStr", "ft_score"))
-            total += h + a
+            total += h
             n += 1
         return max(0.5, total / max(1, n))
 
-    lam = avg(history.get("home_recent", [])) + avg(history.get("away_recent", []))
+    def avg_away_goals(matches):
+        if matches is None or (hasattr(matches, "empty") and matches.empty):
+            return 1.0
+        if hasattr(matches, "iterrows"):
+            matches = [row.to_dict() for _, row in matches.iterrows()]
+        if not matches:
+            return 1.0
+        total, n = 0, 0
+        for m in matches:
+            h, a = _parse_score(_pick(m, "score", "scoreStr", "ft_score"))
+            total += a
+            n += 1
+        return max(0.5, total / max(1, n))
+
+    lam = avg_home_goals(history.get("home_recent", [])) * 1.1 \
+          + avg_away_goals(history.get("away_recent", [])) * 0.9
+
     return {f"{k}球": round(poisson_probability(lam, k), 4) for k in range(8)}
 
 
-# ========== 半全场（保留概率分布） ==========
+# ========== 半全场 ==========
 def calc_half_full(wdl: Dict) -> Dict[str, float]:
     h, d, a = wdl["胜"], wdl["平"], wdl["负"]
     return {
@@ -337,70 +486,25 @@ def calc_half_full(wdl: Dict) -> Dict[str, float]:
     }
 
 
-# ========== ✅ 从比分推导其他维度（保证一致性） ==========
-def _extract_handicap_from_intel(intel: dict) -> float:
-    """
-    从 intel.odds 推断竞彩让球盘口（默认 -1）
-    - 亚盘的 draw_value 是真实让球大小（如 1.5）
-    - 竞彩固定用 -1/+1，所以这里只判方向，不转数值
-    """
-    odds = intel.get("odds", {}) or {}
-
-    # 从欧赔判断谁是热门
-    avg = odds.get("avg", {}) or {}
-    now_euro = avg.get("now", {}) or {}
-    h = _safe_float(now_euro.get("homeWin", 0))
-    a = _safe_float(now_euro.get("awayWin", 0))
-
-    if h > 0 and a > 0:
-        if h < a:
-            return -1.0    # 主队热门 → 主队让1球
-        else:
-            return 1.0     # 客队热门 → 主队受让1球
-
-    # 欧赔拿不到，再看亚盘
-    asia = odds.get("asia", [])
-    if isinstance(asia, list) and asia:
-        first = asia[0]
-        now = first.get("now", {}) or {}
-        draw_val = str(now.get("draw_value", "")).strip()
-        try:
-            magnitude = float(draw_val)
-            if magnitude > 0:
-                # 亚盘 "球半" 通常是主队让球，返回 -1
-                return -1.0
-        except (ValueError, TypeError):
-            pass
-
-    # 兜底
-    return -1.0
-
-
-def _extract_real_odds(intel: dict) -> Dict[str, float]:
-    """
-    提取真实欧赔快照（avg.now）
-    返回：{"胜": 1.80, "平": 3.50, "负": 4.20}
-    """
-    odds = intel.get("odds", {}) or {}
-    avg = odds.get("avg", {}) or {}
-    now = avg.get("now", {}) or {}
-    return {
-        "胜": _safe_float(now.get("homeWin", 0)),
-        "平": _safe_float(now.get("draw", 0)),
-        "负": _safe_float(now.get("awayWin", 0)),
-    }
-
-
-def derive_handicap_from_score(score_str: str, handicap: float) -> str:
-    """从比分推导让球结果"""
+# ========== 从比分推导其他维度 ==========
+def derive_handicap_from_score(score_str: str, handicap: float,
+                                wdl_recommendation: str = "胜") -> str:
     try:
         h, a = map(int, score_str.split(":"))
     except Exception:
-        return "让胜"
+        return _fallback_handicap(wdl_recommendation)
 
     diff = h - a
-    adjusted = diff + handicap
 
+    if handicap == 0:
+        if diff >= 1:
+            return "让胜"
+        elif diff == 0:
+            return "让平"
+        else:
+            return "让负"
+
+    adjusted = diff + handicap
     if adjusted > 0:
         return "让胜"
     elif adjusted == 0:
@@ -409,8 +513,15 @@ def derive_handicap_from_score(score_str: str, handicap: float) -> str:
         return "让负"
 
 
+def _fallback_handicap(wdl: str) -> str:
+    if wdl == "胜":
+        return "让胜"
+    elif wdl == "负":
+        return "让负"
+    return "让平"
+
+
 def derive_total_from_score(score_str: str) -> str:
-    """从比分推导总进球"""
     try:
         h, a = map(int, score_str.split(":"))
         return f"{h+a}球"
@@ -419,18 +530,25 @@ def derive_total_from_score(score_str: str) -> str:
 
 
 def derive_half_full_from_score(score_str: str, wdl: str) -> str:
-    """从比分推导半全场（简化：假设半场平局，下半场分胜负）"""
     try:
         h, a = map(int, score_str.split(":"))
     except Exception:
-        return "平胜"
+        return _fallback_hf(wdl)
 
     if wdl == "胜":
-        return "平胜" if h == 1 else "胜胜"
+        return "胜胜" if h >= 2 else "平胜"
     elif wdl == "负":
-        return "平负"
+        return "负负" if a >= 2 else "平负"
     else:
         return "平平"
+
+
+def _fallback_hf(wdl: str) -> str:
+    if wdl == "胜":
+        return "平胜"
+    elif wdl == "负":
+        return "平负"
+    return "平平"
 
 
 # ========== 主入口 ==========
@@ -439,35 +557,37 @@ def analyze_match(match: Dict[str, Any],
                   intel: Dict[str, Any]) -> Dict[str, Any]:
     home = match.get("主队", "")
     away = match.get("客队", "")
-    handicap = _safe_float(match.get("让球", 0))
+    league = match.get("联赛", "")
 
-    # ✅ 若赛程没提供让球，从 intel.odds 推断
+    # 让球
+    handicap = _safe_float(match.get("让球", 0))
     if handicap == 0:
         handicap = _extract_handicap_from_intel(intel)
         logger.info(f"赛程未提供让球，从赔率推断为 {handicap}")
 
-    # 1. 三源加权算胜平负
+    # 三源加权
     hp = calc_history_prob(history, home, away)
-    ip = calc_intel_prob(intel, home, away)
+    ip = calc_intel_prob(intel, home, away, league)
     op = calc_odds_prob(intel)
     wdl = fuse_probabilities(hp, ip, op)
 
-    # 2. ✅ 先算比分（带胜平负方向约束）
+    # 比分（带方向约束）
     score_prob = calc_score(history, wdl_recommendation=wdl["推荐"])
     top_score = max(score_prob.items(), key=lambda x: x[1])
     score_str = top_score[0]
 
-    # 3. ✅ 其他维度全部从比分推导
-    handicap_pick = derive_handicap_from_score(score_str, handicap)
+    # 从比分推导
+    handicap_pick = derive_handicap_from_score(score_str, handicap,
+                                                wdl_recommendation=wdl["推荐"])
     total_pick = derive_total_from_score(score_str)
     hf_pick = derive_half_full_from_score(score_str, wdl["推荐"])
 
-    # 4. 保留概率分布（用于 confidence / 展示）
+    # 概率分布（展示用）
     handicap_prob = calc_handicap(wdl, handicap)
     total_prob = calc_total_goals(history)
     hf_prob = calc_half_full(wdl)
 
-    # 5. 置信度
+    # 置信度
     max_wdl = max(wdl["胜"], wdl["平"], wdl["负"])
     confidence = round(max_wdl * 0.6 + top_score[1] * 0.4, 4)
 
@@ -493,14 +613,21 @@ def analyze_match(match: Dict[str, Any],
     }
 
 
-# ========== 测试 ==========
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     import json
     mock_history = {
         "h2h": {"total": 4, "home_win": 2, "draw": 1, "away_win": 1},
-        "home_recent": [{"result": "胜", "score": "2-0"}, {"result": "平", "score": "1-1"}],
-        "away_recent": [{"result": "负", "score": "0-2"}, {"result": "平", "score": "1-1"}],
+        "home_recent": [
+            {"result": "胜", "score": "3:1"},
+            {"result": "胜", "score": "2:0"},
+            {"result": "平", "score": "1:1"},
+        ],
+        "away_recent": [
+            {"result": "负", "score": "0:2"},
+            {"result": "平", "score": "1:1"},
+            {"result": "负", "score": "0:1"},
+        ],
     }
     mock_intel = {
         "source": "dongqiudi",

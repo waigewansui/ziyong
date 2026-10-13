@@ -192,17 +192,71 @@ def main():
                 football_data_token=fd_token,
             ) or {}
 
-            # ---------- ✅ 数据对齐：intel（懂球帝结构化 dict/list）优先覆盖 history（DataFrame） ----------
-            # analyze.py 期望 list of dict / dict；fetch_history 返回 DataFrame 会触发
-            # "The truth value of a DataFrame is ambiguous"，所以 intel 有就覆盖
+            # ---------- ✅ V2：数据补齐 + 类型清洗（彻底消灭 DataFrame） ----------
+            def _to_list(v):
+                """把 DataFrame 转 list[dict]，其他原样返回"""
+                if v is None:
+                    return None
+                if hasattr(v, "iterrows"):
+                    return [row.to_dict() for _, row in v.iterrows()]
+                return v
+
+            def _is_empty(v):
+                if v is None:
+                    return True
+                if hasattr(v, "empty") and hasattr(v, "__len__"):
+                    return v.empty
+                if isinstance(v, (list, dict)):
+                    return len(v) == 0
+                return False
+
+            # 先把 history 里所有 DataFrame 转成 list[dict]
+            for k in ("home_recent", "away_recent"):
+                if k in history:
+                    v = history[k]
+                    if hasattr(v, "iterrows"):
+                        history[k] = [row.to_dict() for _, row in v.iterrows()]
+                    elif isinstance(v, list):
+                        pass  # 已经是 list
+                    else:
+                        history[k] = v if v else []
+
+            # h2h 如果是 DataFrame，丢弃（后面 intel 补）
+            if "h2h" in history and hasattr(history["h2h"], "iterrows"):
+                history["h2h"] = {}
+
+            # intel 有数据则覆盖（显式判断空值）
             if intel:
                 intel_recent = intel.get("recent", {}) or {}
-                if intel_recent.get("home"):
+
+                if not _is_empty(intel_recent.get("home")):
                     history["home_recent"] = intel_recent["home"]
-                if intel_recent.get("away"):
+                    logger.info(f"  ↳ 主队近绩: 使用懂球帝 {len(intel_recent['home'])} 场")
+                elif not _is_empty(history.get("home_recent")):
+                    logger.info(f"  ↳ 主队近绩: 使用 football-data/football-charts 数据")
+
+                if not _is_empty(intel_recent.get("away")):
                     history["away_recent"] = intel_recent["away"]
-                if intel.get("h2h"):
-                    history["h2h"] = intel["h2h"]
+                    logger.info(f"  ↳ 客队近绩: 使用懂球帝 {len(intel_recent['away'])} 场")
+                elif not _is_empty(history.get("away_recent")):
+                    logger.info(f"  ↳ 客队近绩: 使用 football-data/football-charts 数据")
+
+                intel_h2h = intel.get("h2h", {}) or {}
+                if intel_h2h.get("total", 0) > 0:
+                    history["h2h"] = intel_h2h
+                    logger.info(f"  ↳ H2H: 使用懂球帝 {intel_h2h.get('total', 0)} 场")
+                elif not _is_empty(history.get("h2h")):
+                    logger.info(f"  ↳ H2H: 使用 football-data/football-charts 数据")
+
+            # 最终兜底：确保 history 字段不是 DataFrame
+            for k in ("home_recent", "away_recent"):
+                v = history.get(k)
+                if hasattr(v, "iterrows"):
+                    history[k] = [row.to_dict() for _, row in v.iterrows()]
+                if _is_empty(history.get(k)):
+                    history[k] = []
+            if _is_empty(history.get("h2h")):
+                history["h2h"] = {}
 
             # 3. 多维度分析
             result = analyze_match(match.to_dict(), history, intel)
