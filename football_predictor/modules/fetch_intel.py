@@ -222,23 +222,49 @@ def parse_h2h(battle_history: dict, home: str = "") -> Dict[str, Any]:
     }
 
 
+def _color_to_result(color) -> str:
+    """懂球帝 color 字段转中文结果"""
+    if not color:
+        return ""
+    c = str(color).lower().strip()
+    if c in ("win", "w", "胜", "3"):
+        return "胜"
+    if c in ("draw", "d", "平", "0"):
+        return "平"
+    if c in ("lose", "loss", "l", "负", "2"):
+        return "负"
+    return ""
+
+
 def parse_recent_record(recent_record: dict) -> Dict[str, List]:
     """
     解析主客近 10 场
-    真实结构：recent_record.home.matches[] / recent_record.away.matches[]
+    真实结构：
+    {
+        "team_A": [{date, team_A_name, team_B_name, main_team, score, color}, ...],
+        "team_B": [...]
+    }
     """
     result = {"home": [], "away": []}
-    for side in ["home", "away"]:
-        side_data = recent_record.get(side, {}) or {}
-        for m in side_data.get("matches", []):
-            result[side].append({
+
+    for side_key, side_name in [("team_A", "home"), ("team_B", "away")]:
+        matches = recent_record.get(side_key, [])
+        if not isinstance(matches, list):
+            continue
+        for m in matches:
+            if not isinstance(m, dict):
+                continue
+            color = m.get("color", "")
+            result[side_name].append({
                 "date": m.get("date", ""),
-                "opponent": _pick(m.get("opponent", {}), "name", default="") if isinstance(m.get("opponent"), dict) else m.get("opponent", ""),
+                "competition": m.get("competition", ""),
+                "team_A_name": m.get("team_A_name", ""),
+                "team_B_name": m.get("team_B_name", ""),
+                "main_team": m.get("main_team", ""),
                 "score": m.get("score", ""),
                 "half_score": m.get("half_score", ""),
-                "result": m.get("result", ""),
-                "color": m.get("color", ""),
-                "is_home": m.get("is_home", False),
+                "color": color,
+                "result": _color_to_result(color),
             })
     return result
 
@@ -246,22 +272,25 @@ def parse_recent_record(recent_record: dict) -> Dict[str, List]:
 def parse_league_table(league_table: dict) -> Dict[str, Any]:
     """
     解析积分榜
-    真实结构：league_table.team_A.total.matches_total / matches_won / goals_pro
+    真实结构：
+    {
+        "team_A": {"total": {...}, "home": {...}, "away": {...}},
+        "team_B": {...}
+    }
     """
-    def _extract(side_data):
-        if not side_data:
+    def _extract(team_data):
+        if not isinstance(team_data, dict):
             return {}
-        total = side_data.get("total", {}) or {}
+        total = team_data.get("total", {}) or {}
         return {
-            "rank": _safe_int(_pick(side_data, "rank", "position")),
-            "team": _pick(side_data, "name", "team_name", default=""),
-            "points": _safe_int(_pick(side_data, "points", "score")),
-            "played": _safe_int(_pick(total, "matches_total", "played")),
-            "win": _safe_int(_pick(total, "matches_won", "win")),
-            "draw": _safe_int(_pick(total, "matches_draw", "draw")),
-            "loss": _safe_int(_pick(total, "matches_lost", "lose")),
-            "goals_for": _safe_int(_pick(total, "goals_pro", "goals_for")),
-            "goals_against": _safe_int(_pick(total, "goals_against", "goals_con")),
+            "rank": _safe_int(_pick(total, "rank", "position", "ranking")),
+            "points": _safe_int(_pick(total, "points", "score", "point")),
+            "played": _safe_int(_pick(total, "matches_total", "played", "games")),
+            "win": _safe_int(_pick(total, "matches_won", "win", "won")),
+            "draw": _safe_int(_pick(total, "matches_draw", "draw", "drawn")),
+            "loss": _safe_int(_pick(total, "matches_lost", "lose", "lost")),
+            "goals_for": _safe_int(_pick(total, "goals_pro", "goals_for", "goal_for")),
+            "goals_against": _safe_int(_pick(total, "goals_against", "goals_con", "goal_against")),
             "goal_diff": _safe_int(_pick(total, "goal_diff", "goals_diff")),
         }
 
@@ -272,20 +301,29 @@ def parse_league_table(league_table: dict) -> Dict[str, Any]:
 
 
 def parse_sideline(sideline: dict) -> Dict[str, List]:
-    """解析伤停名单"""
+    """
+    解析伤停名单
+    真实结构：
+    {
+        "team_A": [...],   # 直接是 list
+        "team_B": [...]
+    }
+    """
     result = {"home": [], "away": []}
-    for side in ["home", "away"]:
-        side_data = sideline.get(side, {}) or {}
-        players = side_data.get("players", []) if isinstance(side_data, dict) else []
+
+    for side_key, side_name in [("team_A", "home"), ("team_B", "away")]:
+        players = sideline.get(side_key, [])
+        if not isinstance(players, list):
+            continue
         for p in players:
             if not isinstance(p, dict):
                 continue
-            result[side].append({
-                "name": p.get("name", ""),
-                "number": p.get("number", ""),
+            result[side_name].append({
+                "name": p.get("name", "") or p.get("player_name", ""),
+                "number": p.get("number", "") or p.get("shirt_number", ""),
                 "position": p.get("position", ""),
-                "reason": p.get("reason", ""),
-                "status": p.get("status", ""),
+                "reason": p.get("reason", "") or p.get("injury", "") or p.get("injury_reason", ""),
+                "status": p.get("status", "") or p.get("type", ""),
             })
     return result
 
