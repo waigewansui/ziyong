@@ -192,28 +192,17 @@ def main():
                 football_data_token=fd_token,
             ) or {}
 
-            # ---------- ✅ 数据补齐：从 intel 补全 history ----------
+            # ---------- ✅ 数据对齐：intel（懂球帝结构化 dict/list）优先覆盖 history（DataFrame） ----------
+            # analyze.py 期望 list of dict / dict；fetch_history 返回 DataFrame 会触发
+            # "The truth value of a DataFrame is ambiguous"，所以 intel 有就覆盖
             if intel:
                 intel_recent = intel.get("recent", {}) or {}
-
-                # 补主队近绩
-                if not history.get("home_recent") and intel_recent.get("home"):
+                if intel_recent.get("home"):
                     history["home_recent"] = intel_recent["home"]
-                    logger.info(f"  ↳ 从懂球帝补齐主队近绩: {len(intel_recent['home'])} 场")
-                elif not history.get("home_recent"):
-                    logger.warning(f"  ↳ 主队近绩为空，且懂球帝无数据")
-
-                # 补客队近绩
-                if not history.get("away_recent") and intel_recent.get("away"):
+                if intel_recent.get("away"):
                     history["away_recent"] = intel_recent["away"]
-                    logger.info(f"  ↳ 从懂球帝补齐客队近绩: {len(intel_recent['away'])} 场")
-                elif not history.get("away_recent"):
-                    logger.warning(f"  ↳ 客队近绩为空，且懂球帝无数据")
-
-                # 补 H2H
-                if not history.get("h2h") and intel.get("h2h"):
+                if intel.get("h2h"):
                     history["h2h"] = intel["h2h"]
-                    logger.info(f"  ↳ 从懂球帝补齐 H2H: {intel['h2h'].get('total', 0)} 场")
 
             # 3. 多维度分析
             result = analyze_match(match.to_dict(), history, intel)
