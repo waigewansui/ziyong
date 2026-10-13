@@ -27,3 +27,10 @@ parlay:
   types: ["2串1", "3串1", "4串1", "5串1"]
   min_confidence: 0.55
   max_results: 20
+
+bankroll: 1000
+
+kelly:
+  fraction: 0.5
+  max_single_pct: 0.02
+  max_pool_pct: 0.20

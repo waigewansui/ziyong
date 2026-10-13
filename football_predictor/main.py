@@ -239,7 +239,9 @@ def main():
         output_dir = os.path.join(BASE_DIR, output_dir)
 
     try:
-        summary = output_all(results, output_dir=output_dir)
+        bankroll = config.get("bankroll", 1000)
+        summary = output_all(results, output_dir=output_dir, bankroll=bankroll)
+        logger.info(f"本金: {bankroll} 元")
         logger.info(f"输出摘要: {summary}")
     except Exception as e:
         logger.error(f"输出失败: {e}")
