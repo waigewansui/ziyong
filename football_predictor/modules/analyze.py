@@ -338,6 +338,44 @@ def calc_half_full(wdl: Dict) -> Dict[str, float]:
 
 
 # ========== ✅ 从比分推导其他维度（保证一致性） ==========
+def _extract_handicap_from_intel(intel: dict) -> float:
+    """
+    从 intel.odds 推断竞彩让球盘口（默认 -1）
+    - 亚盘的 draw_value 是真实让球大小（如 1.5）
+    - 竞彩固定用 -1/+1，所以这里只判方向，不转数值
+    """
+    odds = intel.get("odds", {}) or {}
+
+    # 从欧赔判断谁是热门
+    avg = odds.get("avg", {}) or {}
+    now_euro = avg.get("now", {}) or {}
+    h = _safe_float(now_euro.get("homeWin", 0))
+    a = _safe_float(now_euro.get("awayWin", 0))
+
+    if h > 0 and a > 0:
+        if h < a:
+            return -1.0    # 主队热门 → 主队让1球
+        else:
+            return 1.0     # 客队热门 → 主队受让1球
+
+    # 欧赔拿不到，再看亚盘
+    asia = odds.get("asia", [])
+    if isinstance(asia, list) and asia:
+        first = asia[0]
+        now = first.get("now", {}) or {}
+        draw_val = str(now.get("draw_value", "")).strip()
+        try:
+            magnitude = float(draw_val)
+            if magnitude > 0:
+                # 亚盘 "球半" 通常是主队让球，返回 -1
+                return -1.0
+        except (ValueError, TypeError):
+            pass
+
+    # 兜底
+    return -1.0
+
+
 def derive_handicap_from_score(score_str: str, handicap: float) -> str:
     """从比分推导让球结果"""
     try:
@@ -387,6 +425,11 @@ def analyze_match(match: Dict[str, Any],
     home = match.get("主队", "")
     away = match.get("客队", "")
     handicap = _safe_float(match.get("让球", 0))
+
+    # ✅ 若赛程没提供让球，从 intel.odds 推断
+    if handicap == 0:
+        handicap = _extract_handicap_from_intel(intel)
+        logger.info(f"赛程未提供让球，从赔率推断为 {handicap}")
 
     # 1. 三源加权算胜平负
     hp = calc_history_prob(history, home, away)
