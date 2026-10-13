@@ -37,6 +37,43 @@ FD_LEAGUE_MAP = {
     "法甲": "FL1", "欧冠": "CL", "欧联": "EL",
 }
 
+# 队名别名表：中文队名 → 搜索别名 list（懂球帝 search 用）
+# 当原队名 search 不到 match 时，按序尝试这些别名
+TEAM_ALIASES: Dict[str, List[str]] = {
+    "里斯本": ["里斯本竞技", "Sporting CP", "葡体"],
+    "里斯本竞技": ["里斯本", "Sporting CP", "葡体"],
+    "米堡": ["米德尔斯堡", "Middlesbrough"],
+    "米德尔斯堡": ["米堡", "Middlesbrough"],
+    "斯托克城": ["Stoke City"],
+    "里尔": ["Lille"],
+    "布鲁日": ["布鲁日俱乐部", "Club Brugge"],
+    "加拉塔萨": ["加拉塔萨雷", "Galatasaray"],
+    "加拉塔萨雷": ["加拉塔萨", "Galatasaray"],
+    "布里兰": ["武里南联", "Buriram Utd"],
+    "武里南联": ["布里兰", "Buriram Utd"],
+    "纽卡斯尔喷气机": ["纽卡斯尔", "Newcastle Jets"],
+    "纽卡斯尔": ["纽卡斯尔联", "纽卡斯尔喷气机"],
+    "上海海港": ["海港", "上海上港", "Shanghai Port"],
+    "大田市民": ["大田韩亚市民", "Daejeon Citizen"],
+    "大阪钢巴": ["Gamba Osaka"],
+    "北京国安": ["国安", "Beijing Guoan"],
+    "比利亚雷": ["比利亚雷亚尔", "Villarreal"],
+    "比利亚雷亚尔": ["比利亚雷", "Villarreal"],
+    "莱红牛": ["RB莱比锡", "Leipzig"],
+    "国际米兰": ["国米", "Inter Milan"],
+    "马德里竞技": ["马竞", "Atl. Madrid", "Atletico Madrid"],
+    "马德里竞技": ["马竞", "Atl. Madrid", "Atletico Madrid"],
+    "曼城": ["曼彻斯特城", "Manchester City"],
+    "曼联": ["曼彻斯特联", "Manchester Utd"],
+    "巴萨": ["巴塞罗那", "Barcelona"],
+    "皇马": ["皇家马德里", "Real Madrid"],
+    "拜仁": ["拜仁慕尼黑", "Bayern Munich"],
+    "阿森纳": ["Arsenal"],
+    "那不勒斯": ["Napoli"],
+    "埃因霍温": ["PSV", "PSV Eindhoven"],
+    "维京": ["Viking FK"],
+}
+
 
 # ============ 通用请求（优化：缩短超时、减少重试、加进度日志） ============
 def _safe_get(url: str, params: dict = None, retry: int = 2,
@@ -147,36 +184,62 @@ def dongqiudi_search(keyword: str, page: int = 1) -> List[Dict]:
     return results
 
 
+def _get_aliases(name: str) -> List[str]:
+    """取队名的所有搜索别名（含原名）"""
+    aliases = [name]
+    if name in TEAM_ALIASES:
+        aliases.extend(TEAM_ALIASES[name])
+    # 模糊匹配：如果原名是某个 key 的子串
+    for key, als in TEAM_ALIASES.items():
+        if name in key or key in name:
+            if key not in aliases:
+                aliases.append(key)
+            for a in als:
+                if a not in aliases:
+                    aliases.append(a)
+    # 去重保持顺序
+    seen = set()
+    return [a for a in aliases if not (a in seen or seen.add(a))]
+
+
 def find_match_id(home: str, away: str) -> Optional[str]:
     """
-    通过搜索找到比赛 ID（修复版）
+    通过搜索找到比赛 ID（别名链增强版）
 
     策略：
-    1. 搜主队 → 在 matches.data[] 里找客队名匹配
-    2. 搜客队 → 在 matches.data[] 里找主队名匹配
+    1. 搜主队（别名链）→ 在 matches.data[] 里找客队名匹配
+    2. 搜客队（别名链）→ 在 matches.data[] 里找主队名匹配
+    3. 对手匹配也走别名链
     """
-    match_id = _search_one_team(home, away)
-    if match_id:
-        return match_id
+    home_aliases = _get_aliases(home)
+    away_aliases = _get_aliases(away)
 
-    logger.info(f"  主队搜索未命中，尝试搜客队")
-    match_id = _search_one_team(away, home)
-    if match_id:
-        return match_id
+    # 主队搜索链
+    for h_kw in home_aliases:
+        match_id = _search_one_team_with_aliases(h_kw, away_aliases)
+        if match_id:
+            return match_id
 
-    logger.warning(f"未找到 {home} vs {away} 的 match_id")
+    # 客队搜索链
+    for a_kw in away_aliases:
+        match_id = _search_one_team_with_aliases(a_kw, home_aliases)
+        if match_id:
+            logger.info(f"  主队方向未命中，最终通过客队别名 {a_kw!r} 找到")
+            return match_id
+
+    logger.warning(f"未找到 {home} vs {away} 的 match_id（已尝试 {len(home_aliases)+len(away_aliases)} 个关键词）")
     return None
 
 
-def _search_one_team(team_keyword: str, opponent_name: str) -> Optional[str]:
+def _search_one_team_with_aliases(team_keyword: str, opponent_aliases: List[str]) -> Optional[str]:
     """
-    搜索单队，在返回的比赛列表里找对手匹配的场次
+    搜索单队，对手匹配支持别名链
 
     Args:
-        team_keyword: 搜索关键词（如 "亚特兰大"）
-        opponent_name: 要匹配的对手队名（如 "威尼斯"）
+        team_keyword: 搜索关键词
+        opponent_aliases: 对手队名的所有可能别名 list
     """
-    logger.info(f"搜索 match_id: {team_keyword} → 找对手 {opponent_name}")
+    logger.info(f"搜索 match_id: {team_keyword} → 找对手 {'/'.join(opponent_aliases[:3])}")
     results = dongqiudi_search(team_keyword)
     if not results:
         return None
@@ -184,7 +247,6 @@ def _search_one_team(team_keyword: str, opponent_name: str) -> Optional[str]:
     for item in results:
         if not isinstance(item, dict):
             continue
-        # 跳过 _teams 附加项
         if "_teams" in item and "match_id" not in item:
             continue
 
@@ -195,10 +257,11 @@ def _search_one_team(team_keyword: str, opponent_name: str) -> Optional[str]:
         if not match_id:
             continue
 
-        # 对手队名必须出现在某一侧
-        if opponent_name and opponent_name in (team_a + team_b):
-            logger.info(f"  ✅ 命中: {team_a} vs {team_b} → match_id={match_id}")
-            return str(match_id)
+        # 对手队名匹配（别名链）
+        for opp in opponent_aliases:
+            if opp and (opp in team_a or opp in team_b or team_a in opp or team_b in opp):
+                logger.info(f"  ✅ 命中: {team_a} vs {team_b} → match_id={match_id}")
+                return str(match_id)
 
     return None
 
@@ -501,10 +564,18 @@ def calc_handicap_trend(odds: Dict[str, Any]) -> Dict[str, str]:
     return trend
 
 
+# 杯赛（无传统积分榜，football-data free tier 也拿不到 standings）
+CUP_LEAGUES = {"欧冠", "欧联", "亚冠", "欧协", "世俱杯", "世界杯", "欧洲杯", "美洲杯"}
+
+
 # ============ 4. football-data 降级 ============
 def football_data_rankings(team: str, league: str,
                            token: str = "") -> Dict[str, Any]:
-    """从 football-data 拿排名（降级方案）"""
+    """从 football-data 拿排名（降级方案）。杯赛直接跳过"""
+    # 杯赛直接跳过 —— 无传统积分榜，懂球帝 league_table 本身就是小组排名
+    if league in CUP_LEAGUES:
+        return {"team": team, "rank": 0, "source": "cup_league", "league": league}
+
     if not token:
         return {"team": team, "rank": 0, "source": "unavailable"}
 
@@ -543,6 +614,21 @@ def get_intel(home: str, away: str, league: str,
     统一入口：聚合所有情报
     优先级：懂球帝比赛分析 > football-data 降级
     """
+    # 联赛名归一化（体彩/手动输入的联赛名 vs 懂球帝/FD 的标准名）
+    LEAGUE_NORMALIZE = {
+        "亚冠精英": "亚冠",
+        "亚冠联赛": "亚冠",
+        "亚洲冠军联赛": "亚冠",
+        "英冠": "英冠",
+        "冠军联赛": "欧冠",
+        "UEFA欧冠": "欧冠",
+        "英超联赛": "英超",
+        "西甲联赛": "西甲",
+        "意甲联赛": "意甲",
+        "德甲联赛": "德甲",
+        "法甲联赛": "法甲",
+    }
+    league = LEAGUE_NORMALIZE.get(league, league)
     logger.info(f"===== 情报获取: {home} vs {away} ({league}) =====")
 
     intel = {

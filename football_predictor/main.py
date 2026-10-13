@@ -192,42 +192,16 @@ def main():
                 football_data_token=fd_token,
             ) or {}
 
-            # ---------- ✅ V2：数据补齐 + 类型清洗（彻底消灭 DataFrame） ----------
-            def _to_list(v):
-                """把 DataFrame 转 list[dict]，其他原样返回"""
-                if v is None:
-                    return None
-                if hasattr(v, "iterrows"):
-                    return [row.to_dict() for _, row in v.iterrows()]
-                return v
-
-            def _is_empty(v):
-                if v is None:
-                    return True
-                if hasattr(v, "empty") and hasattr(v, "__len__"):
-                    return v.empty
-                if isinstance(v, (list, dict)):
-                    return len(v) == 0
-                return False
-
-            # 先把 history 里所有 DataFrame 转成 list[dict]
-            for k in ("home_recent", "away_recent"):
-                if k in history:
-                    v = history[k]
-                    if hasattr(v, "iterrows"):
-                        history[k] = [row.to_dict() for _, row in v.iterrows()]
-                    elif isinstance(v, list):
-                        pass  # 已经是 list
-                    else:
-                        history[k] = v if v else []
-
-            # h2h 如果是 DataFrame，丢弃（后面 intel 补）
-            if "h2h" in history and hasattr(history["h2h"], "iterrows"):
-                history["h2h"] = {}
-
-            # intel 有数据则覆盖（显式判断空值）
+            # ---------- 数据补齐：intel 有数据则覆盖 history（history 已为 list[dict]，无需 DataFrame 清洗） ----------
             if intel:
                 intel_recent = intel.get("recent", {}) or {}
+
+                def _is_empty(v):
+                    if v is None:
+                        return True
+                    if isinstance(v, (list, dict)):
+                        return len(v) == 0
+                    return False
 
                 if not _is_empty(intel_recent.get("home")):
                     history["home_recent"] = intel_recent["home"]
@@ -248,14 +222,12 @@ def main():
                 elif not _is_empty(history.get("h2h")):
                     logger.info(f"  ↳ H2H: 使用 football-data/football-charts 数据")
 
-            # 最终兜底：确保 history 字段不是 DataFrame
-            for k in ("home_recent", "away_recent"):
-                v = history.get(k)
-                if hasattr(v, "iterrows"):
-                    history[k] = [row.to_dict() for _, row in v.iterrows()]
-                if _is_empty(history.get(k)):
-                    history[k] = []
-            if _is_empty(history.get("h2h")):
+            # 兜底：确保关键字段都是干净的 list/dict
+            if not isinstance(history.get("home_recent"), list):
+                history["home_recent"] = []
+            if not isinstance(history.get("away_recent"), list):
+                history["away_recent"] = []
+            if not isinstance(history.get("h2h"), dict):
                 history["h2h"] = {}
 
             # 3. 多维度分析
@@ -294,8 +266,10 @@ def main():
 
     try:
         bankroll = config.get("bankroll", 1000)
-        summary = output_all(results, output_dir=output_dir, bankroll=bankroll)
-        logger.info(f"本金: {bankroll} 元")
+        min_conf = config.get("parlay", {}).get("confidence_threshold", 0.45)
+        summary = output_all(results, output_dir=output_dir,
+                             bankroll=bankroll, min_confidence=min_conf)
+        logger.info(f"本金: {bankroll} 元, 串关最低置信度: {min_conf:.0%}")
         logger.info(f"输出摘要: {summary}")
     except Exception as e:
         logger.error(f"输出失败: {e}")

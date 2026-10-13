@@ -63,6 +63,10 @@ TEAM_MAP: dict[str, tuple[int | None, str | None, str | None]] = {
     "布莱顿": (103, "Brighton", "premier"),
     "西汉姆": (563, "West Ham", "premier"),
     "纽卡斯尔": (67, "Newcastle", "premier"),
+    # 英冠 cha
+    "斯托克城": (None, "Stoke City", "cha"),
+    "米堡": (None, "Middlesbrough", "cha"),
+    "米德尔斯堡": (None, "Middlesbrough", "cha"),
     # 西甲 spain1
     "皇家马德里": (86, "Real Madrid", "spain1"),
     "皇马": (86, "Real Madrid", "spain1"),
@@ -94,18 +98,35 @@ TEAM_MAP: dict[str, tuple[int | None, str | None, str | None]] = {
     "巴黎圣日耳曼": (524, "PSG", "france1"),
     "巴黎": (524, "PSG", "france1"),
     "朗斯": (None, "Lens", "france1"),
+    "里尔": (None, "Lille", "france1"),
     # 葡超 portugal1
     "里斯本": (None, "Sporting", "portugal1"),
     "里斯本竞技": (None, "Sporting", "portugal1"),
+    "葡体": (None, "Sporting", "portugal1"),
     "本菲卡": (None, "Benfica", "portugal1"),
     # 荷甲 holland1
     "埃因霍温": (None, "PSV", "holland1"),
+    "PSV": (None, "PSV", "holland1"),
     # 比甲 belgium1
     "布鲁日": (None, "Club Brugge", "belgium1"),
+    "布鲁日俱乐部": (None, "Club Brugge", "belgium1"),
     # 土超 turkey1
     "加拉塔萨雷": (None, "Galatasaray", "turkey1"),
-    # 挪超 norway1 (足球图临时补)
+    "加拉塔萨": (None, "Galatasaray", "turkey1"),
+    # 挪超 norway1
     "维京": (None, "Viking", "norway1"),
+    # 澳超 australia1
+    "纽卡斯尔喷气机": (None, "Newcastle Jets", "australia1"),
+    # 中超 china1
+    "上海海港": (None, "Shanghai Port", "china1"),
+    "北京国安": (None, "Beijing Guoan", "china1"),
+    # 泰超 thailand1
+    "布里兰": (None, "Buriram Utd", "thailand1"),
+    "武里南联": (None, "Buriram Utd", "thailand1"),
+    # 日职 japan1
+    "大阪钢巴": (None, "Gamba Osaka", "japan1"),
+    # K联赛 korea1
+    "大田市民": (None, "Daejeon Citizen", "korea1"),
 }
 
 
@@ -113,13 +134,13 @@ TEAM_MAP: dict[str, tuple[int | None, str | None, str | None]] = {
 # HTTP 通用
 # ---------------------------------------------------------------------------
 
-def _safe_get(url: str, headers: dict = None, retry: int = 3) -> requests.Response | None:
+def _safe_get(url: str, headers: dict = None, retry: int = 1) -> requests.Response | None:
     hdrs = headers or FD_HEADERS
     last_err = None
     for i in range(retry):
         try:
-            time.sleep(random.uniform(0.5, 1.5))
-            resp = requests.get(url, headers=hdrs, timeout=15)
+            time.sleep(random.uniform(0.3, 0.8))
+            resp = requests.get(url, headers=hdrs, timeout=10)
             resp.raise_for_status()
             return resp
         except Exception as e:
@@ -310,8 +331,8 @@ def _resolve_team(team_cn: str) -> tuple[int | None, str | None, str | None]:
     return None, None, None
 
 
-def fetch_recent_form(team_cn: str, n: int = 10, football_data_token: str = "") -> pd.DataFrame:
-    """球队近 N 场战绩 —— football-data 优先, 降级 football-charts"""
+def fetch_recent_form(team_cn: str, n: int = 10, football_data_token: str = "") -> list[dict]:
+    """球队近 N 场战绩 —— football-data 优先, 降级 football-charts. 直接返回 list[dict]"""
     fd_id, fc_team, fc_league = _resolve_team(team_cn)
 
     # ---- 尝试 football-data ----
@@ -319,9 +340,8 @@ def fetch_recent_form(team_cn: str, n: int = 10, football_data_token: str = "") 
         fd_matches = _fetch_fd_team_matches(fd_id, football_data_token)
         if fd_matches:
             rows = [_fd_match_to_row(m, fd_id) for m in fd_matches[:n]]
-            df = pd.DataFrame(rows)
-            logger.info(f"[football-data] {team_cn} 近 {len(df)} 场 (token)")
-            return df
+            logger.info(f"[football-data] {team_cn} 近 {len(rows)} 场 (token)")
+            return rows
         logger.warning(f"football-data 无 {team_cn} 数据, 降级 football-charts")
 
     # ---- 降级 football-charts ----
@@ -341,16 +361,15 @@ def fetch_recent_form(team_cn: str, n: int = 10, football_data_token: str = "") 
 
         uniq.sort(key=lambda x: x.get("date", ""), reverse=True)
         rows = [_fc_match_to_row(m, fc_team) for m in uniq[:n]]
-        df = pd.DataFrame(rows)
-        logger.info(f"[football-charts] {team_cn} 近 {len(df)} 场")
-        return df
+        logger.info(f"[football-charts] {team_cn} 近 {len(rows)} 场")
+        return rows
 
     logger.error(f"无任何数据源映射: {team_cn}")
-    return pd.DataFrame()
+    return []
 
 
-def fetch_h2h(home_cn: str, away_cn: str, n: int = 10, football_data_token: str = "") -> pd.DataFrame:
-    """两队历史交锋 (H2H)"""
+def fetch_h2h(home_cn: str, away_cn: str, n: int = 10, football_data_token: str = "") -> list[dict]:
+    """两队历史交锋 (H2H) —— 直接返回 list[dict]"""
     h_fd, h_fc_team, h_fc_lg = _resolve_team(home_cn)
     a_fd, a_fc_team, a_fc_lg = _resolve_team(away_cn)
 
@@ -371,9 +390,8 @@ def fetch_h2h(home_cn: str, away_cn: str, n: int = 10, football_data_token: str 
         h2h.sort(key=lambda x: x.get("utcDate", ""), reverse=True)
         if h2h:
             rows = [_fd_match_to_row(m, h_fd) for m in h2h[:n]]
-            df = pd.DataFrame(rows)
-            logger.info(f"[football-data] H2H {home_cn} vs {away_cn}: {len(df)} 场")
-            return df
+            logger.info(f"[football-data] H2H {home_cn} vs {away_cn}: {len(rows)} 场")
+            return rows
         logger.warning(f"football-data 无 H2H {home_cn} vs {away_cn}, 降级")
 
     # ---- football-charts 降级 ----
@@ -404,57 +422,45 @@ def fetch_h2h(home_cn: str, away_cn: str, n: int = 10, football_data_token: str 
         h2h.sort(key=lambda x: x.get("date", ""), reverse=True)
         if h2h:
             rows = [_fc_match_to_row(m, h_fc_team) for m in h2h[:n]]
-            df = pd.DataFrame(rows)
-            logger.info(f"[football-charts] H2H {home_cn} vs {away_cn}: {len(df)} 场")
-            return df
+            logger.info(f"[football-charts] H2H {home_cn} vs {away_cn}: {len(rows)} 场")
+            return rows
 
     logger.error(f"H2H 无数据源: {home_cn} vs {away_cn}")
-    return pd.DataFrame()
+    return []
 
 
 def get_history(home: str, away: str, football_data_token: str = "") -> dict:
     """
-    统一入口 —— 获取两队历史交锋 + 近期战绩
-
-    Args:
-        home: 主队中文名
-        away: 客队中文名
-        football_data_token: football-data.org API token（空则跳过 football-data，降级 football-charts）
+    统一入口 —— 获取两队历史交锋 + 近期战绩. 全部返回 list[dict]
     """
     logger.info(f"获取历史战绩: {home} vs {away}")
-    df_h2h = fetch_h2h(home, away, 10, football_data_token)
-    df_home = fetch_recent_form(home, 10, football_data_token)
-    df_away = fetch_recent_form(away, 10, football_data_token)
-    logger.info(
-        f"结果: H2H={len(df_h2h)}  主近={len(df_home)}  客近={len(df_away)}"
-    )
+    h2h = fetch_h2h(home, away, 10, football_data_token)
+    home_recent = fetch_recent_form(home, 10, football_data_token)
+    away_recent = fetch_recent_form(away, 10, football_data_token)
+    logger.info(f"结果: H2H={len(h2h)}  主近={len(home_recent)}  客近={len(away_recent)}")
     return {
-        "h2h": df_h2h,
-        "home_recent": df_home,
-        "away_recent": df_away,
+        "h2h": h2h,
+        "home_recent": home_recent,
+        "away_recent": away_recent,
     }
 
 
 if __name__ == "__main__":
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+        format="%(asctime)s [%(levelname)s] %(name)s - %(message)s"
     )
 
-    # 今日体彩真实比赛: 马竞 vs 曼联
     home, away = "马竞", "曼联"
     print(f"\n{'='*60}")
     print(f"  测试: {home} vs {away}")
     print(f"{'='*60}")
 
     result = get_history(home, away)
-
-    for key, df in result.items():
-        print(f"\n--- {key} ({len(df)} 条) ---")
-        if df.empty:
+    for key, rows in result.items():
+        print(f"\n--- {key} ({len(rows)} 条) ---")
+        if not rows:
             print("  (空)")
         else:
-            cols = [c for c in ["日期", "联赛", "主队", "客队", "对手",
-                                "比分", "半场", "结果", "胜平负", "总进球", "半全场"]
-                    if c in df.columns]
-            print(df[cols].to_string(index=False))
+            for r in rows[:3]:
+                print(f"  {r}")

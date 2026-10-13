@@ -251,8 +251,8 @@ def save_csv(results: List[Dict], filepath: str):
 
 # ============ 串关生成 ============
 def generate_parlays(results: List[Dict], play_type: str = "胜平负",
-                     min_confidence: float = 0.35,
-                     max_n: int = 5, max_results: int = 50,
+                     min_confidence: float = 0.45,
+                     max_n: int = 5, max_results: int = 20,
                      bankroll: float = 1000.0) -> List[Dict]:
     candidates = [r for r in results
                   if float(r.get("置信度", 0)) >= min_confidence]
@@ -303,8 +303,8 @@ def generate_parlays(results: List[Dict], play_type: str = "胜平负",
 
 
 def generate_mixed_parlays(results: List[Dict],
-                           min_confidence: float = 0.35,
-                           max_n: int = 5, max_results: int = 20,
+                           min_confidence: float = 0.45,
+                           max_n: int = 5, max_results: int = 10,
                            bankroll: float = 1000.0) -> List[Dict]:
     candidates = [r for r in results
                   if float(r.get("置信度", 0)) >= min_confidence]
@@ -399,7 +399,7 @@ def save_parlays(parlays: List[Dict], filepath: str,
 # ============ 统一入口 ============
 def output_all(results: List[Dict], output_dir: str = "output",
                play_types: List[str] = None,
-               min_confidence: float = 0.30,
+               min_confidence: float = 0.45,
                bankroll: float = 1000.0) -> Dict[str, Any]:
     os.makedirs(output_dir, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
