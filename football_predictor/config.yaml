@@ -1,0 +1,29 @@
+data_sources:
+  schedule: ["sporttery", "manual"]
+  history: ["dongqiudi", "football-data", "football-charts"]
+  intel: ["dongqiudi", "football-data"]
+
+football_data_token: ""   # 本地手动填, CI 从 GitHub Secret 注入
+
+weights:
+  history: 0.40
+  intel: 0.30
+  odds: 0.30
+
+request:
+  timeout: 15
+  retry: 3
+  delay_min: 1.0
+  delay_max: 3.0
+  headers:
+    User-Agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+output:
+  dir: "output"
+  format: ["markdown", "json"]
+  top_n: 20
+
+parlay:
+  types: ["2串1", "3串1", "4串1", "5串1"]
+  min_confidence: 0.55
+  max_results: 20

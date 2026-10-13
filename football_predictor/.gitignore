@@ -1,0 +1,29 @@
+# === Secrets ===
+config.local.yaml
+.env
+*.secret
+secrets/
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+
+# === Outputs ===
+output/
+!output/.gitkeep
+*.log
+
+# === IDE ===
+.vscode/
+.idea/
+*.swp
+
+# === OS ===
+.DS_Store
+Thumbs.db

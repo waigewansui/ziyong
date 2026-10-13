@@ -1,0 +1,15 @@
+# === HTTP 请求 ===
+requests>=2.31.0
+
+# === 数据处理 ===
+pandas>=2.0.0
+
+# === 配置 ===
+pyyaml>=6.0
+
+# === Excel 支持（fetch_schedule 读 .xlsx 时用） ===
+openpyxl>=3.1.0
+
+# 注：beautifulsoup4 / lxml / tabulate 已移除
+# - bs4 + lxml: 项目未使用，所有数据源都是纯 JSON API
+# - tabulate: output 用 Markdown 表格，未依赖 tabulate
