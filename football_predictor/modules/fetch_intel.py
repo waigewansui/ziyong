@@ -89,8 +89,13 @@ def _safe_int(v, default=0) -> int:
 # ============ 1. 搜索 API：拿 match_id / team_id ============
 def dongqiudi_search(keyword: str, page: int = 1) -> List[Dict]:
     """
-    搜索懂球帝内容
-    返回：[{id, title, url, date, category, type}, ...]
+    搜索懂球帝内容（修复版）
+
+    真实行为：
+    - 双队组合关键词 → 返回 0 条 match
+    - 单队关键词 → 返回该队近期比赛 matches.data[]
+
+    返回：[{match_id, team_A_name, team_B_name, competition_name, start_play, status, ...}, ...]
     """
     url = "http://api.dongqiudi.com/search"
     params = {"keywords": keyword, "type": "all", "page": page}
@@ -99,45 +104,102 @@ def dongqiudi_search(keyword: str, page: int = 1) -> List[Dict]:
         return []
 
     results = []
-    for item in data.get("news", []):
+
+    # ✅ 主搜 matches.data（比赛列表）
+    matches = data.get("matches", {}) or {}
+    matches_data = matches.get("data", []) if isinstance(matches, dict) else []
+    for item in matches_data:
+        if not isinstance(item, dict):
+            continue
         results.append({
-            "id": str(item.get("id", "")),
-            "title": item.get("title", ""),
-            "url": item.get("url", ""),
-            "date": item.get("date", ""),
-            "category": item.get("category", ""),
-            "type": item.get("type", ""),
+            "match_id": str(item.get("match_id", "") or ""),
+            "team_A_name": item.get("team_A_name", ""),
+            "team_B_name": item.get("team_B_name", ""),
+            "competition_name": item.get("competition_name", ""),
+            "start_play": item.get("start_play", ""),
+            "status": item.get("status", ""),
+            "fs_A": item.get("fs_A", ""),
+            "fs_B": item.get("fs_B", ""),
         })
-    logger.info(f"搜索 '{keyword}' 返回 {len(results)} 条")
+
+    # ✅ 同时收集 teams（球队 ID）
+    teams = data.get("teams", []) or []
+    team_list = []
+    for item in teams:
+        if not isinstance(item, dict):
+            continue
+        team_name_raw = item.get("team_name", "") or ""
+        # 去掉 <font color=...> 高亮标签
+        team_name_clean = team_name_raw.replace(
+            '<font color=#16ac3a>', '').replace('</font>', '')
+        team_list.append({
+            "team_id": str(item.get("team_id", "") or ""),
+            "team_name": team_name_clean,
+            "team_en_name": item.get("team_en_name", ""),
+            "country": item.get("country", ""),
+        })
+
+    # 附加到 results 里（方便调用方一起拿）
+    if team_list:
+        results = results + [{"_teams": team_list}]
+
+    logger.info(f"搜索 '{keyword}' → matches={len(matches_data)}, teams={len(teams)}")
     return results
 
 
 def find_match_id(home: str, away: str) -> Optional[str]:
     """
-    通过搜索找到比赛 ID
-    策略：先搜主队，扫 matches.data[]，substring 匹配客队
+    通过搜索找到比赛 ID（修复版）
+
+    策略：
+    1. 搜主队 → 在 matches.data[] 里找客队名匹配
+    2. 搜客队 → 在 matches.data[] 里找主队名匹配
     """
-    # 策略 1：搜 "home away"
-    for kw in [f"{home} {away}", home]:
-        results = dongqiudi_search(kw)
-        for r in results:
-            title = r.get("title", "")
-            url = r.get("url", "")
+    match_id = _search_one_team(home, away)
+    if match_id:
+        return match_id
 
-            # 匹配 URL 里的 match_id
-            if "/match/" in url:
-                mid = url.split("/match/")[-1].split(".")[0].split("?")[0]
-                if mid.isdigit():
-                    logger.info(f"找到 match_id: {mid} (from URL)")
-                    return mid
-
-            # 匹配标题包含双方队名
-            if home in title and away in title:
-                if r["id"] and r["id"].isdigit():
-                    logger.info(f"找到 match_id: {r['id']} (from title)")
-                    return r["id"]
+    logger.info(f"  主队搜索未命中，尝试搜客队")
+    match_id = _search_one_team(away, home)
+    if match_id:
+        return match_id
 
     logger.warning(f"未找到 {home} vs {away} 的 match_id")
+    return None
+
+
+def _search_one_team(team_keyword: str, opponent_name: str) -> Optional[str]:
+    """
+    搜索单队，在返回的比赛列表里找对手匹配的场次
+
+    Args:
+        team_keyword: 搜索关键词（如 "亚特兰大"）
+        opponent_name: 要匹配的对手队名（如 "威尼斯"）
+    """
+    logger.info(f"搜索 match_id: {team_keyword} → 找对手 {opponent_name}")
+    results = dongqiudi_search(team_keyword)
+    if not results:
+        return None
+
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        # 跳过 _teams 附加项
+        if "_teams" in item and "match_id" not in item:
+            continue
+
+        match_id = item.get("match_id", "")
+        team_a = item.get("team_A_name", "")
+        team_b = item.get("team_B_name", "")
+
+        if not match_id:
+            continue
+
+        # 对手队名必须出现在某一侧
+        if opponent_name and opponent_name in (team_a + team_b):
+            logger.info(f"  ✅ 命中: {team_a} vs {team_b} → match_id={match_id}")
+            return str(match_id)
+
     return None
 
 
