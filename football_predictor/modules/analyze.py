@@ -376,6 +376,21 @@ def _extract_handicap_from_intel(intel: dict) -> float:
     return -1.0
 
 
+def _extract_real_odds(intel: dict) -> Dict[str, float]:
+    """
+    提取真实欧赔快照（avg.now）
+    返回：{"胜": 1.80, "平": 3.50, "负": 4.20}
+    """
+    odds = intel.get("odds", {}) or {}
+    avg = odds.get("avg", {}) or {}
+    now = avg.get("now", {}) or {}
+    return {
+        "胜": _safe_float(now.get("homeWin", 0)),
+        "平": _safe_float(now.get("draw", 0)),
+        "负": _safe_float(now.get("awayWin", 0)),
+    }
+
+
 def derive_handicap_from_score(score_str: str, handicap: float) -> str:
     """从比分推导让球结果"""
     try:
@@ -473,6 +488,7 @@ def analyze_match(match: Dict[str, Any],
         "半全场概率": hf_prob,
         "置信度": confidence,
         "维度分解": {"历史": hp, "情报": ip, "赔率": op},
+        "真实赔率": _extract_real_odds(intel),
         "数据源": intel.get("source", "none"),
     }
 

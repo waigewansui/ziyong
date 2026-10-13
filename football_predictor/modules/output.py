@@ -42,6 +42,7 @@ def format_bet_item(match_id: str, play_type: str, key: str) -> str:
 
 
 def _pick_play(result: Dict, play_type: str) -> Dict[str, Any]:
+    """从单场结果里提取指定玩法的推荐/概率/赔率"""
     mapping = {
         "胜平负": ("胜平负推荐", "胜平负概率"),
         "让球":   ("让球推荐",   "让球概率"),
@@ -56,13 +57,21 @@ def _pick_play(result: Dict, play_type: str) -> Dict[str, Any]:
     prob_map = result.get(prob_key, {}) or {}
     prob = float(prob_map.get(pick, 0.0))
 
+    # ✅ 真实赔率优先（仅胜平负有真实欧赔；其他玩法仍用反推）
+    real_odds = result.get("真实赔率", {}) or {}
+    if play_type == "胜平负" and real_odds.get(pick):
+        odds = round(float(real_odds[pick]), 2)
+    else:
+        odds = prob_to_odds(prob)
+
     return {
         "match_id": result.get("场次编号", ""),
         "match": result.get("对阵", ""),
         "play_type": play_type,
         "pick": pick,
         "prob": prob,
-        "odds": prob_to_odds(prob),
+        "odds": odds,
+        "odds_source": "real" if play_type == "胜平负" and real_odds.get(pick) else "inferred",
         "confidence": float(result.get("置信度", 0.0)),
     }
 
