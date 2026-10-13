@@ -2,11 +2,11 @@ name: Daily Football Prediction
 
 on:
   schedule:
-    - cron: '0 3 * * *'   # 北京时间 11:00
+    - cron: '0 3 * * *'
   workflow_dispatch:
     inputs:
       mode:
-        description: '运行模式'
+        description: 'Run mode'
         required: true
         default: 'auto'
         type: choice
@@ -15,11 +15,11 @@ on:
           - date
           - manual
       value:
-        description: '参数（date 用 YYYY-MM-DD；manual 用赛程文本，支持 \n 字面量）'
+        description: 'Value for date or manual'
         required: false
         default: ''
       match_ids:
-        description: '逗号分隔的 match_id（可选）'
+        description: 'Comma-separated match ids'
         required: false
         default: ''
 
@@ -50,18 +50,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Inject token via config.local.yaml
+      - name: Inject token
         env:
           FOOTBALL_DATA_TOKEN: ${{ secrets.FOOTBALL_DATA_TOKEN }}
         run: |
           if [ -z "$FOOTBALL_DATA_TOKEN" ]; then
-            echo "::error::FOOTBALL_DATA_TOKEN secret 未配置"
+            echo "::error::FOOTBALL_DATA_TOKEN secret not set"
             exit 1
           fi
-          cat > config.local.yaml <<EOF
-          football_data_token: "${FOOTBALL_DATA_TOKEN}"
-          EOF
-          echo "config.local.yaml 已生成"
+          printf 'football_data_token: "%s"\n' "$FOOTBALL_DATA_TOKEN" > config.local.yaml
+          echo "config.local.yaml generated"
 
       - name: Run prediction
         env:
@@ -98,15 +96,10 @@ jobs:
       - name: Job summary
         if: always()
         run: |
-          {
-            echo "## 预测运行结果"
-            echo ""
-            echo "- 时间：$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')"
-            echo "- 模式：${{ github.event.inputs.mode || 'auto' }}"
-            echo "- 状态：${{ job.status }}"
-            echo ""
-            echo "### 输出文件"
-            echo '```'
-            ls -lh output/ 2>/dev/null || echo "无输出"
-            echo '```'
-          } >> $GITHUB_STEP_SUMMARY
+          echo "## Prediction Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Time: $(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_STEP_SUMMARY
+          echo "- Mode: ${{ github.event.inputs.mode || 'auto' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Status: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          ls -lh output/ 2>/dev/null >> $GITHUB_STEP_SUMMARY || echo "no output" >> $GITHUB_STEP_SUMMARY
