@@ -65,7 +65,7 @@ def fetch_from_sporttery(date: str = None) -> pd.DataFrame:
 
 
 def _parse_sporttery(data: dict) -> pd.DataFrame:
-    """解析体彩网返回数据"""
+    """解析体彩网返回数据（5 玩法全解析）"""
     rows = []
     try:
         match_list = data.get("value", {}).get("matchInfoList", [])
@@ -74,9 +74,7 @@ def _parse_sporttery(data: dict) -> pd.DataFrame:
                 rows.append({
                     "场次编号": m.get("matchNumStr", ""),
                     "联赛": m.get("leagueAbbName", ""),
-                    "比赛时间": (
-                        m.get("matchDate", "") + " " + m.get("matchTime", "")
-                    ).strip(),
+                    "比赛时间": m.get("matchDate", "") + " " + m.get("matchTime", ""),
                     "主队": m.get("homeTeamAbbName", ""),
                     "客队": m.get("awayTeamAbbName", ""),
                     "让球": m.get("hhad", {}).get("goalLine", ""),
@@ -86,6 +84,12 @@ def _parse_sporttery(data: dict) -> pd.DataFrame:
                     "让球胜": m.get("hhad", {}).get("h", ""),
                     "让球平": m.get("hhad", {}).get("d", ""),
                     "让球负": m.get("hhad", {}).get("a", ""),
+                    # ✅ 5 玩法原始赔率 dict
+                    "赔率_胜平负": m.get("had", {}) or {},
+                    "赔率_让球": m.get("hhad", {}) or {},
+                    "赔率_比分": m.get("crs", {}) or {},
+                    "赔率_总进球": m.get("ttg", {}) or {},
+                    "赔率_半全场": m.get("hafu", {}) or {},
                 })
     except Exception as e:
         logger.error(f"解析体彩数据失败: {e}")

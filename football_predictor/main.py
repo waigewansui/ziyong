@@ -1,5 +1,5 @@
 """
-足球竞猜智能推荐系统 - 主程序入口
+数据查询分析系统系统 - 主程序入口
 
 功能：
 1. 加载配置（config.yaml + config.local.yaml 深度合并）
@@ -92,7 +92,7 @@ def load_config(path: str = None) -> Dict[str, Any]:
 # ============ 命令行参数 ============
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="足球竞猜智能推荐系统",
+        description="数据查询分析系统系统",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--date", type=str, default=None,
@@ -129,7 +129,7 @@ def main():
 
     # ---------- 加载配置 ----------
     logger.info("=" * 60)
-    logger.info("足球竞猜智能推荐系统 v1.0")
+    logger.info("数据查询分析系统系统 v1.0")
     logger.info("=" * 60)
 
     config = load_config(args.config)

@@ -134,45 +134,35 @@ def kelly_stake(prob: float, odds: float, bankroll: float,
 # ============ 单场推荐提取 ============
 def _pick_play(result: Dict, play_type: str,
                bankroll: float = 1000.0) -> Dict[str, Any]:
+    """
+    从单场结果提取玩法数据
+    ✅ 5 玩法都用真实赔率（体彩 / 懂球帝）
+    """
     mapping = {
-        "胜平负": ("胜平负推荐", "胜平负概率"),
-        "让球":   ("让球推荐",   "让球概率"),
-        "比分":   ("比分推荐",   "比分概率"),
-        "总进球": ("总进球推荐", "总进球概率"),
-        "半全场": ("半全场推荐", "半全场概率"),
+        "胜平负": ("胜平负推荐", "胜平负概率", "真实赔率"),
+        "让球":   ("让球推荐",   "让球概率",   "真实赔率_让球"),
+        "比分":   ("比分推荐",   "比分概率",   "真实赔率_比分"),
+        "总进球": ("总进球推荐", "总进球概率", "真实赔率_总进球"),
+        "半全场": ("半全场推荐", "半全场概率", "真实赔率_半全场"),
     }
     if play_type not in mapping:
         return {}
-    rec_key, prob_key = mapping[play_type]
+    rec_key, prob_key, odds_key = mapping[play_type]
     pick = result.get(rec_key, "")
     prob_map = result.get(prob_key, {}) or {}
     prob = float(prob_map.get(pick, 0.0))
 
-    real_odds = result.get("真实赔率", {}) or {}
-
-    if play_type == "胜平负" and real_odds.get(pick):
+    # ✅ 从对应玩法的真实赔率里取
+    real_odds = result.get(odds_key, {}) or {}
+    if real_odds.get(pick):
         odds = round(float(real_odds[pick]), 2)
         odds_source = "real"
-        use_kelly = True
-    elif play_type == "让球":
-        odds = prob_to_odds(prob)
-        odds_source = "inferred"
-        use_kelly = True
     else:
         odds = prob_to_odds(prob)
         odds_source = "inferred"
-        use_kelly = False
 
-    if use_kelly:
-        kelly = kelly_stake(prob, odds, bankroll)
-    else:
-        kelly = {
-            "f_full": 0.0, "f_half": 0.0,
-            "stake_raw": 2.0, "stake_capped": 2.0, "stake_final": 2.0,
-            "should_bet": True,
-            "edge": round(prob * odds - 1, 4),
-            "reason": "非核心玩法，固定 2 元娱乐",
-        }
+    # 凯利建议（5 玩法全用）
+    kelly = kelly_stake(prob, odds, bankroll)
 
     return {
         "match_id": result.get("场次编号", ""),

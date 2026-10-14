@@ -360,6 +360,70 @@ def _extract_real_odds(intel: dict) -> Dict[str, float]:
     }
 
 
+# ========== 体彩 5 玩法赔率解析 ==========
+def _parse_crs_odds(crs: dict) -> Dict[str, float]:
+    """解析体彩比分赔率：{s01s00: '9.50'} → {'1:0': 9.5}"""
+    result = {}
+    if not crs:
+        return result
+    for key, val in crs.items():
+        if not key.startswith("s") or key.endswith("f"):
+            continue
+        if key in ("s1sh", "s1sd", "s1sa"):
+            continue
+        if len(key) == 6 and key[3] == "s":
+            try:
+                h = int(key[1:3])
+                a = int(key[4:6])
+                result[f"{h}:{a}"] = _safe_float(val)
+            except (ValueError, IndexError):
+                continue
+    if "s1sh" in crs:
+        result["胜其他"] = _safe_float(crs["s1sh"])
+    if "s1sd" in crs:
+        result["平其他"] = _safe_float(crs["s1sd"])
+    if "s1sa" in crs:
+        result["负其他"] = _safe_float(crs["s1sa"])
+    return result
+
+
+def _parse_ttg_odds(ttg: dict) -> Dict[str, float]:
+    """解析总进球赔率：{s0: '18.0', s1: '7.0'} → {'0球': 18.0, '1球': 7.0}"""
+    result = {}
+    if not ttg:
+        return result
+    for i in range(8):
+        key = f"s{i}"
+        if key in ttg:
+            result[f"{i}球"] = _safe_float(ttg[key])
+    return result
+
+
+def _parse_hafu_odds(hafu: dict) -> Dict[str, float]:
+    """解析半全场赔率"""
+    result = {}
+    if not hafu:
+        return result
+    mapping = {
+        "hh": "胜胜", "hd": "胜平", "ha": "胜负",
+        "dh": "平胜", "dd": "平平", "da": "平负",
+        "ah": "负胜", "ad": "负平", "aa": "负负",
+    }
+    for key, name in mapping.items():
+        if key in hafu:
+            result[name] = _safe_float(hafu[key])
+    return result
+
+
+def _parse_hhad_odds(match: dict) -> Dict[str, float]:
+    """解析让球赔率（从 match dict 的让球胜/平/负字段）"""
+    return {
+        "让胜": _safe_float(match.get("让球胜", 0)),
+        "让平": _safe_float(match.get("让球平", 0)),
+        "让负": _safe_float(match.get("让球负", 0)),
+    }
+
+
 # ========== 比分（V3：主客场进球率） ==========
 def calc_score(history: Dict, wdl_recommendation: str = None) -> Dict[str, float]:
     """
@@ -609,6 +673,11 @@ def analyze_match(match: Dict[str, Any],
         "置信度": confidence,
         "维度分解": {"历史": hp, "情报": ip, "赔率": op},
         "真实赔率": _extract_real_odds(intel),
+        # ✅ 新增 4 个玩法的真实赔率
+        "真实赔率_让球": _parse_hhad_odds(match),
+        "真实赔率_比分": _parse_crs_odds(match.get("赔率_比分", {})),
+        "真实赔率_总进球": _parse_ttg_odds(match.get("赔率_总进球", {})),
+        "真实赔率_半全场": _parse_hafu_odds(match.get("赔率_半全场", {})),
         "数据源": intel.get("source", "none"),
     }
 
