@@ -438,21 +438,28 @@ def _parse_hhad_odds(match: dict) -> Dict[str, float]:
 def calc_score(history: Dict, wdl_recommendation: str = None,
                weather: Dict = None, referee: Dict = None) -> Dict[str, float]:
     def avg_goals(matches, side="home"):
+        """side='home' 统计主队进球，side='away' 统计客队进球"""
         if matches is None:
-            return 1.3
+            return 1.5 if side == "home" else 1.2
         if hasattr(matches, "empty") and matches.empty:
-            return 1.3
+            return 1.5 if side == "home" else 1.2
         if hasattr(matches, "iterrows"):
             matches = [row.to_dict() for _, row in matches.iterrows()]
         if not matches:
-            return 1.3
+            return 1.5 if side == "home" else 1.2
+
         total, n = 0, 0
         for m in matches:
-            sc = _pick(m, "score", "scoreStr", "ft_score")
+            sc = _pick(m, "score", "scoreStr", "ft_score", "比分")
             h, a = _parse_score(sc)
             total += h if side == "home" else a
             n += 1
-        return max(0.8, total / max(1, n))
+
+        if n == 0:
+            return 1.5 if side == "home" else 1.2
+        avg = total / n
+        # ✅ 提高下限：避免 λ 坍缩
+        return max(1.2 if side == "home" else 0.9, avg)
 
     home_goals = avg_goals(history.get("home_recent", []), "home")
     away_goals = avg_goals(history.get("away_recent", []), "away")
@@ -497,31 +504,33 @@ def calc_score(history: Dict, wdl_recommendation: str = None,
 def calc_total_goals(history: Dict, weather: Dict = None, referee: Dict = None) -> Dict[str, float]:
     def avg_home_goals(matches):
         if matches is None or (hasattr(matches, "empty") and matches.empty):
-            return 1.2
+            return 1.4
         if hasattr(matches, "iterrows"):
             matches = [row.to_dict() for _, row in matches.iterrows()]
         if not matches:
-            return 1.2
+            return 1.4
         total, n = 0, 0
         for m in matches:
-            h, a = _parse_score(_pick(m, "score", "scoreStr", "ft_score"))
+            h, a = _parse_score(_pick(m, "score", "scoreStr", "ft_score", "比分"))
             total += h
             n += 1
-        return max(0.5, total / max(1, n))
+        avg = total / max(1, n)
+        return max(0.7, avg)
 
     def avg_away_goals(matches):
         if matches is None or (hasattr(matches, "empty") and matches.empty):
-            return 1.0
+            return 1.1
         if hasattr(matches, "iterrows"):
             matches = [row.to_dict() for _, row in matches.iterrows()]
         if not matches:
-            return 1.0
+            return 1.1
         total, n = 0, 0
         for m in matches:
-            h, a = _parse_score(_pick(m, "score", "scoreStr", "ft_score"))
+            h, a = _parse_score(_pick(m, "score", "scoreStr", "ft_score", "比分"))
             total += a
             n += 1
-        return max(0.5, total / max(1, n))
+        avg = total / max(1, n)
+        return max(0.6, avg)
 
     lam = avg_home_goals(history.get("home_recent", [])) * 1.1 \
           + avg_away_goals(history.get("away_recent", [])) * 0.9

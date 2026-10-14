@@ -649,8 +649,10 @@ def get_intel(home: str, away: str, league: str,
         "handicap_trend": {},
     }
 
-    # 1. 如果没有 match_id，尝试搜索
-    if not match_id:
+    # 1. 加固：match_id 必须是纯数字，否则重新搜索
+    if not match_id or not str(match_id).isdigit():
+        if match_id:
+            logger.warning(f"match_id '{match_id}' 非数字，重新搜索")
         match_id = find_match_id(home, away)
         intel["match_id"] = match_id or ""
 
