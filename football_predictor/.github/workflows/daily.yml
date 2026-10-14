@@ -51,3 +51,11 @@ jobs:
             football_predictor/output/*.md
             football_predictor/output/*.json
           retention-days: 30
+      - name: Notify on failure
+        if: failure()
+        run: |
+          if [ -n "${{ secrets.DINGTALK_WEBHOOK }}" ]; then
+            curl -X POST "${{ secrets.DINGTALK_WEBHOOK }}" \
+              -H 'Content-Type: application/json' \
+              -d '{"msgtype":"text","text":{"content":"❌ 每日预测失败 run #${{ github.run_number }}"}}'
+          fi

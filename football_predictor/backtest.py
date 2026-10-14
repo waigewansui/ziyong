@@ -135,6 +135,8 @@ def compare_result(result: Dict, record: Dict) -> Dict[str, Any]:
         "对阵": f"{record.get('主队')} vs {record.get('客队')}",
         "日期": record.get("日期", ""),
         "模型推荐": {},
+        "真实赔率": {},
+        "模型概率": 0.5,
         "真实结果": {
             "胜平负": record.get("真实胜平负", ""),
             "比分": record.get("真实比分", ""),
@@ -152,6 +154,10 @@ def compare_result(result: Dict, record: Dict) -> Dict[str, Any]:
     wdl_real = record.get("真实胜平负", "")
     cmp["模型推荐"]["胜平负"] = wdl_pick
     cmp["命中"]["胜平负"] = (wdl_pick == wdl_real) if wdl_real else None
+
+    # 真实赔率 + 模型概率
+    cmp["真实赔率"] = result.get("真实赔率", {}) or {}
+    cmp["模型概率"] = result.get("胜平负概率", {}).get(wdl_pick, 0.5)
 
     # 让球
     hd_pick = result.get("让球推荐", "")
@@ -215,9 +221,10 @@ def simulate_kelly(cmp_list: List[Dict], bankroll: float = 1000.0) -> Dict[str, 
         if not wdl_pick or wdl_hit is None:
             continue
 
-        # 用模型概率 + 固定赔率（无真实赔率时用 1.8 近似）
-        odds = 1.80
-        prob = 0.5  # 占位，实际应从 result 取
+        # 用真实赔率
+        real_odds = cmp.get("真实赔率", {}) or {}
+        odds = float(real_odds.get(wdl_pick, 1.8))
+        prob = float(cmp.get("模型概率", 0.5))
         k = kelly_stake(prob, odds, balance)
         stake = k["stake_final"]
 

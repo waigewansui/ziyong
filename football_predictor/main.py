@@ -185,7 +185,7 @@ def main():
                         f"置信度={result['置信度']:.2%}")
         except Exception as e:
             logger.error(f"  ✗ 失败: {e}")
-            logger.debug(traceback.format_exc())
+            logger.error(traceback.format_exc())
 
     if not all_results:
         logger.error("全部失败")
@@ -220,6 +220,17 @@ def main():
         output_dir = os.path.join(BASE_DIR, output_dir)
     bankroll = config.get("bankroll", 1000)
     output_all(results, output_dir=output_dir, bankroll=bankroll)
+
+    # 归档
+    from modules.history_archiver import archive
+    from modules.bets_tracker import summary as bet_summary
+    archive(output_dir)
+
+    # 收益总结
+    s = bet_summary()
+    if s["已结算"] > 0:
+        logger.info(f"📊 累计收益: 投入{s['总投入']}元 净盈亏{s['净盈亏']}元 "
+                    f"ROI {s['ROI']:.2%} 命中率{s['命中率']:.2%}")
 
     # 步骤5：预览
     logger.info("-" * 60)

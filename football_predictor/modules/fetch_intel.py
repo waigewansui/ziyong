@@ -13,10 +13,14 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 # ============ 请求配置 ============
+import os
+
 ANDROID_UA = (
     "Mozilla/5.0 (Linux; Android 13; SM-S9080) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 )
+
+DONGQIUDI_COOKIE = os.environ.get("DONGQIUDI_COOKIE", "")
 
 HEADERS = {
     "User-Agent": ANDROID_UA,
@@ -24,6 +28,8 @@ HEADERS = {
     "Accept-Language": "zh-CN,zh;q=0.9",
     "Referer": "https://www.dongqiudi.com/",
 }
+if DONGQIUDI_COOKIE:
+    HEADERS["Cookie"] = DONGQIUDI_COOKIE
 
 # 联赛 ID 映射（懂球帝）
 LEAGUE_MAP = {

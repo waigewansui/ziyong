@@ -260,8 +260,13 @@ def generate_parlays(results: List[Dict], play_type: str = "胜平负",
         return []
 
     parlays = []
+    seen_combos = set()
     for n in range(2, min(max_n + 1, len(picked) + 1)):
         for combo in combinations(picked, n):
+            key = frozenset(c["match_id"] for c in combo)
+            if key in seen_combos:
+                continue
+            seen_combos.add(key)
             odds_product = 1.0
             prob_product = 1.0
             for c in combo:
@@ -321,8 +326,13 @@ def generate_mixed_parlays(results: List[Dict],
         return []
 
     parlays = []
+    seen_combos = set()
     for n in range(2, min(max_n + 1, len(picked) + 1)):
         for combo in combinations(picked, n):
+            key = frozenset(c["match_id"] for c in combo)
+            if key in seen_combos:
+                continue
+            seen_combos.add(key)
             odds_product = 1.0
             prob_product = 1.0
             for c in combo:

@@ -170,8 +170,9 @@ else:
         return pd.DataFrame(rows)
 
     # 5 个 Tab
-    tab_wdl, tab_hd, tab_score, tab_total, tab_hf = st.tabs(
-        ["🎯 胜平负", "🔀 让球", "🎲 比分", "⚽ 总进球", "🔁 半全场"]
+    tab_wdl, tab_hd, tab_score, tab_total, tab_hf, tab_hist, tab_bets = st.tabs(
+        ["🎯 胜平负", "🔀 让球", "🎲 比分", "⚽ 总进球", "🔁 半全场",
+         "📅 历史", "💰 收益"]
     )
 
     with tab_wdl:
@@ -189,6 +190,38 @@ else:
     with tab_hf:
         st.dataframe(build_table("半全场推荐", "半全场概率", "真实赔率_半全场"),
                      use_container_width=True, hide_index=True)
+
+    with tab_hist:
+        st.subheader("📅 最近 10 天历史报告")
+        from glob import glob
+        history_dirs = sorted(
+            glob(os.path.join(BASE_DIR, "output", "history", "*")), reverse=True
+        )[:10]
+        for d in history_dirs:
+            date_str = os.path.basename(d)
+            md_files = glob(os.path.join(d, "recommend_*.md"))
+            with st.expander(f"{date_str} ({len(md_files)} 份报告)"):
+                for f in md_files[:1]:
+                    st.markdown(open(f, encoding="utf-8").read()[:2000])
+        if not history_dirs:
+            st.info("暂无历史报告")
+
+    with tab_bets:
+        st.subheader("💰 投注收益跟踪")
+        from modules.bets_tracker import load_bets, summary
+        s = summary()
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("总投入", f"{s['总投入']}元")
+        col2.metric("净盈亏", f"{s['净盈亏']}元")
+        col3.metric("ROI", f"{s['ROI']:.2%}")
+        col4.metric("命中率", f"{s['命中率']:.2%}")
+
+        bets = load_bets()
+        if bets:
+            df = pd.DataFrame(bets)
+            st.dataframe(df, use_container_width=True, hide_index=True)
+        else:
+            st.info("暂无投注记录")
 
     # 串关
     st.markdown("---")

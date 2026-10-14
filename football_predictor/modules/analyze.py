@@ -32,6 +32,36 @@ LEAGUE_AVG_GOALS = {
 }
 DEFAULT_LEAGUE_AVG = 1.30
 
+# 主场优势系数（不同联赛主场加成不同）
+HOME_ADVANTAGE = {
+    "英超": 1.08, "西甲": 1.10, "意甲": 1.09,
+    "德甲": 1.06, "法甲": 1.08,
+    "欧冠": 1.05, "欧联": 1.06,
+    "亚冠": 1.15, "亚冠精英": 1.15, "亚冠乙": 1.15,
+    "英冠": 1.08, "日联赛杯": 1.10,
+    "解放者杯": 1.18, "美职": 1.10,
+    "荷甲": 1.12, "葡超": 1.10,
+}
+DEFAULT_HOME_ADV = 1.08
+
+# 赛事重要性系数（战意）
+MOTIVATION_FACTOR = {
+    "欧冠淘汰赛": 1.10,
+    "欧冠小组赛": 1.00,
+    "欧联淘汰赛": 1.08,
+    "亚冠淘汰赛": 1.10,
+    "亚冠小组赛": 0.98,
+    "解放者杯淘汰赛": 1.12,
+    "联赛争冠": 1.08,
+    "联赛保级": 1.10,
+    "联赛中游": 0.95,
+    "友谊赛": 0.85,
+}
+DEFAULT_MOTIVATION = 1.00
+
+# 概率收缩系数（0.85 = 向 0.5 收缩 15%）
+PROB_SHRINK = 0.85
+
 LEAGUE_WEIGHTS = {
     "欧冠":   {"history": 0.20, "intel": 0.20, "odds": 0.60},
     "欧联":   {"history": 0.20, "intel": 0.20, "odds": 0.60},
@@ -158,6 +188,48 @@ def _extract_team_goals_and_conceded(match: dict, team_name: str = "") -> Tuple[
     if match.get("main_team") == "team_B":
         return a, h
     return h, a
+
+
+def _calc_fatigue(recent_matches) -> float:
+    """赛程密集度系数：近7天≥3场→0.88，≥2场→0.94，1场→0.98，无→1.05"""
+    from datetime import datetime
+    if not recent_matches:
+        return 1.0
+    now = datetime.now()
+    recent_7d = 0
+    for m in recent_matches:
+        date_str = _pick(m, "date", "match_date", default="")
+        if not date_str:
+            continue
+        try:
+            date_part = str(date_str)[:10]
+            d = datetime.strptime(date_part, "%Y-%m-%d")
+            if (now - d).days <= 7:
+                recent_7d += 1
+        except Exception:
+            continue
+
+    if recent_7d >= 3:
+        return 0.88
+    elif recent_7d == 2:
+        return 0.94
+    elif recent_7d == 1:
+        return 0.98
+    else:
+        return 1.05
+
+
+def _calc_motivation(league: str, home_rank: int = 0, away_rank: int = 0) -> float:
+    """战意系数：保级/淘汰赛加成，中游/友谊赛减益"""
+    if (league in ("英超", "西甲", "意甲", "德甲", "法甲")
+            and (home_rank >= 15 or away_rank >= 15)):
+        return 1.08
+    if "淘汰" in league or "决赛" in league:
+        return 1.10
+    if "友谊赛" in league:
+        return 0.85
+    return 1.00
+
 
 
 def _pick(d, *keys, default=None):
@@ -350,20 +422,40 @@ def calc_odds_prob(intel: Dict) -> Dict[str, float]:
     return _normalize({"胜": p_h, "平": p_d, "负": p_a})
 
 
-# ========== 融合（方向5：平局专项 + 非线性放大） ==========
+# ========== 融合（动态权重 + 平局专项 + 非线性放大） ==========
 def fuse_probabilities(hp, ip, op, league: str = "", history: Dict = None) -> Dict:
-    w = get_weights(league)
+    """动态权重：根据 H2H/近绩完整度调整"""
+    base_w = get_weights(league)
+
+    # 动态调整：H2H 缺失时降低历史权重
+    h = history if isinstance(history, dict) else {}
+    h2h_total = h.get("h2h", {}).get("total", 0) if isinstance(h.get("h2h"), dict) else 0
+    if h2h_total == 0:
+        w = {"history": base_w["history"] * 0.6,
+             "intel": base_w["intel"] * 1.0,
+             "odds": base_w["odds"] * 1.3}
+    elif h2h_total >= 5:
+        w = {"history": base_w["history"] * 1.15,
+             "intel": base_w["intel"] * 0.95,
+             "odds": base_w["odds"] * 0.95}
+    else:
+        w = base_w
+
+    # 归一化
+    total_w = sum(w.values())
+    w = {k: v / total_w for k, v in w.items()}
+
     win = hp["胜"]*w["history"] + ip["胜"]*w["intel"] + op["胜"]*w["odds"]
     draw = hp["平"]*w["history"] + ip["平"]*w["intel"] + op["平"]*w["odds"]
     lose = hp["负"]*w["history"] + ip["负"]*w["intel"] + op["负"]*w["odds"]
 
-    # 方向5：平局专项加厚
+    # 平局专项
     draw_boost = _detect_draw_signal(hp, ip, op, history)
     if draw_boost:
         draw *= 1.35
         logger.info(f"  ⚖️ 检测到平局信号，平局概率 +35%")
 
-    # ✅ 非线性放大：把偏离 1/3 的幅度放大 1.5 倍
+    # 非线性放大
     AMPLIFY = 1.5
     def amplify(p):
         diff = p - 1/3
@@ -373,11 +465,11 @@ def fuse_probabilities(hp, ip, op, league: str = "", history: Dict = None) -> Di
     draw = amplify(draw)
     lose = amplify(lose)
 
-    # 归一化
     total = win + draw + lose
     win, draw, lose = win/total, draw/total, lose/total
 
     d = {"胜": win, "平": draw, "负": lose}
+    logger.debug(f"  动态权重: {w}, H2H={h2h_total}")
     return {
         "胜": round(win, 4), "平": round(draw, 4), "负": round(lose, 4),
         "推荐": max(d, key=d.get),
@@ -555,10 +647,11 @@ def calc_score(history: Dict, home: str = "", away: str = "",
     away_defense = mean(a_conceded, 1.5)
 
     league_avg = LEAGUE_AVG_GOALS.get(league, DEFAULT_LEAGUE_AVG)
+    home_adv = HOME_ADVANTAGE.get(league, DEFAULT_HOME_ADV)
 
-    # L1：对手防守强度交叉
-    lam_h_raw = home_attack * (away_defense / league_avg) * 1.05
-    lam_a_raw = away_attack * (home_defense / league_avg) * 1.05
+    # L1：对手防守强度交叉 + 主场优势
+    lam_h_raw = home_attack * (away_defense / league_avg) * home_adv
+    lam_a_raw = away_attack * (home_defense / league_avg) * (2 - home_adv) * 0.95
 
     # L2：混合联赛均值（平滑极端值）
     lam_h = 0.75 * lam_h_raw + 0.25 * league_avg
@@ -567,6 +660,13 @@ def calc_score(history: Dict, home: str = "", away: str = "",
     # L3：放宽上下限
     lam_h = max(0.9, min(3.8, lam_h))
     lam_a = max(0.6, min(2.8, lam_a))
+
+    # 疲劳 + 战意
+    fatigue_h = _calc_fatigue(history.get("home_recent", []))
+    fatigue_a = _calc_fatigue(history.get("away_recent", []))
+    motivation = _calc_motivation(league)
+    lam_h *= fatigue_h * motivation
+    lam_a *= fatigue_a * motivation
 
     if weather and weather.get("available"):
         f = weather.get("goal_factor", 1.0)
@@ -654,15 +754,23 @@ def calc_total_goals(history: Dict, home: str = "", away: str = "",
     away_defense = mean(a_conceded, 1.5)
 
     league_avg = LEAGUE_AVG_GOALS.get(league, DEFAULT_LEAGUE_AVG)
+    home_adv = HOME_ADVANTAGE.get(league, DEFAULT_HOME_ADV)
 
-    lam_h_raw = home_attack * (away_defense / league_avg) * 1.05
-    lam_a_raw = away_attack * (home_defense / league_avg) * 1.05
+    lam_h_raw = home_attack * (away_defense / league_avg) * home_adv
+    lam_a_raw = away_attack * (home_defense / league_avg) * (2 - home_adv) * 0.95
 
     lam_h = 0.75 * lam_h_raw + 0.25 * league_avg
     lam_a = 0.75 * lam_a_raw + 0.25 * league_avg
 
     lam_h = max(0.9, min(3.8, lam_h))
     lam_a = max(0.6, min(2.8, lam_a))
+
+    # 疲劳 + 战意
+    fatigue_h = _calc_fatigue(history.get("home_recent", []))
+    fatigue_a = _calc_fatigue(history.get("away_recent", []))
+    motivation = _calc_motivation(league)
+    lam_h *= fatigue_h * motivation
+    lam_a *= fatigue_a * motivation
 
     if weather and weather.get("available"):
         f = weather.get("goal_factor", 1.0)
@@ -738,6 +846,19 @@ def analyze_match(match: Dict, history: Dict, intel: Dict,
     ip = calc_intel_prob(intel, home, away, league)
     op = calc_odds_prob(intel)
     wdl = fuse_probabilities(hp, ip, op, league, history)
+
+    # 概率收缩（避免过度自信）
+    def shrink(p):
+        return round(PROB_SHRINK * p + (1 - PROB_SHRINK) * 0.5, 4)
+    wdl["胜"] = shrink(wdl["胜"])
+    wdl["平"] = shrink(wdl["平"])
+    wdl["负"] = shrink(wdl["负"])
+    total_s = wdl["胜"] + wdl["平"] + wdl["负"]
+    wdl["胜"] = round(wdl["胜"] / total_s, 4)
+    wdl["平"] = round(wdl["平"] / total_s, 4)
+    wdl["负"] = round(wdl["负"] / total_s, 4)
+    wdl["推荐"] = max({"胜": wdl["胜"], "平": wdl["平"], "负": wdl["负"]},
+                       key=lambda k: {"胜": wdl["胜"], "平": wdl["平"], "负": wdl["负"]}[k])
 
     score_prob = calc_score(history, home=home, away=away, league=league,
                              wdl_recommendation=wdl["推荐"],
