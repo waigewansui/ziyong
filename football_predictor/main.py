@@ -24,6 +24,7 @@ from modules.fetch_history import get_history
 from modules.fetch_intel import get_intel
 from modules.fetch_weather import fetch_weather
 from modules.fetch_referee import fetch_referee
+from modules.team_name_resolver import get_resolver
 from modules.analyze import analyze_match
 from modules.output import output_all
 
@@ -125,13 +126,33 @@ def main():
             home = match.get("主队", "")
             away = match.get("客队", "")
             league = match.get("联赛", "")
-            match_id = match.get("match_id", "") or match.get("场次编号", "")
+            # 优先用 match_id 字段，其次是空（让 fetch_intel 搜索）
+            match_id = match.get("match_id", "").strip()
+            if match_id and not match_id.isdigit():
+                # 如果不是纯数字，说明不是真 match_id，清空让系统搜索
+                logger.warning(f"非法 match_id: {match_id}，改为自动搜索")
+                match_id = ""
 
             logger.info(f"[{idx+1}/{len(schedule)}] {home} vs {away} ({league})")
 
             history = get_history(home, away, football_data_token=fd_token) or {}
             intel = get_intel(home, away, league, match_id=match_id,
                               football_data_token=fd_token) or {}
+
+            # 自动学习队名
+            resolver = get_resolver()
+            resolver.extract_and_learn(intel, home)
+            resolver.extract_and_learn(intel, away)
+            # 从 get_history 返回的英文队名里也学一下
+            for side in ("home_recent", "away_recent"):
+                for m in (history.get(side, []) or []):
+                    if isinstance(m, dict):
+                        h_ = m.get("主队", "") or m.get("home", "")
+                        a_ = m.get("客队", "") or m.get("away", "")
+                        if h_:
+                            resolver.learn(home if home in str(h_) else "", str(h_))
+                        if a_:
+                            resolver.learn(away if away in str(a_) else "", str(a_))
 
             # 补数据
             if intel:
@@ -204,19 +225,20 @@ def main():
     logger.info("-" * 60)
     logger.info("步骤 5/5: 预览")
     logger.info("")
-    logger.info("=" * 110)
-    logger.info(f"{'场次':<8} {'对阵':<28} {'胜平负':<6} {'比分':<6} {'置信度':<8} {'天气':<12} {'裁判':<8}")
-    logger.info("-" * 110)
+    logger.info("=" * 120)
+    logger.info(f"{'场次':<8} {'对阵':<28} {'胜平负':<6} {'比分':<6} {'置信度':<8} {'天气':<12} {'裁判':<8} {'数据质量':<10}")
+    logger.info("-" * 120)
     for r in results:
         weather_desc = (r.get("天气", {}) or {}).get("description", "—")[:8]
         referee_name = (r.get("裁判", {}) or {}).get("name", "—")[:6]
+        dq = r.get("数据质量", "—")
         logger.info(f"{r.get('场次编号', ''):<8} "
                     f"{r.get('对阵', '')[:26]:<28} "
                     f"{r.get('胜平负推荐', ''):<6} "
                     f"{r.get('比分推荐', ''):<6} "
                     f"{r.get('置信度', 0):<8.2%} "
-                    f"{weather_desc:<12} {referee_name:<8}")
-    logger.info("=" * 110)
+                    f"{weather_desc:<12} {referee_name:<8} {dq:<10}")
+    logger.info("=" * 120)
     logger.info(f"完成！原始 {original_count} 场 → 过滤后 {len(results)} 场")
 
 

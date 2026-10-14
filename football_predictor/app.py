@@ -58,6 +58,10 @@ with st.sidebar:
     bankroll = st.number_input("本金（元）", min_value=100, max_value=100000,
                                 value=1000, step=100)
 
+    # 是否过滤低置信度
+    no_filter = st.checkbox("显示全部（不过滤）", value=False,
+                             help="勾选后显示全部场次，不勾选只显示高置信度")
+
     run_btn = st.button("🚀 开始分析", type="primary", use_container_width=True)
 
 
@@ -70,6 +74,8 @@ if run_btn:
         cmd += ["--manual", manual_text]
     if match_ids.strip():
         cmd += ["--match-ids", match_ids.strip()]
+    if no_filter:
+        cmd += ["--no-filter"]
 
     st.info(f"运行命令：`{' '.join(cmd)}`")
 

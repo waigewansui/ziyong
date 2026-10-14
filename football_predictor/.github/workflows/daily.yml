@@ -2,7 +2,12 @@ name: Daily Football Prediction
 
 on:
   schedule:
-    - cron: '0 3 * * *'   # 北京时间 11:00
+    # 每天 11:00 北京时间（赛程发布后）
+    - cron: '0 3 * * *'
+    # 每天 21:00 北京时间（赛前 3 小时快照）
+    - cron: '0 13 * * *'
+    # 每天 23:00 北京时间（赛前 1 小时快照）
+    - cron: '0 15 * * *'
   workflow_dispatch:
 
 permissions:
@@ -24,17 +29,20 @@ jobs:
           cache: 'pip'
       - name: Install deps
         run: pip install -r requirements.txt
-      - name: Inject token
+      - name: Inject secrets
         env:
           FOOTBALL_DATA_TOKEN: ${{ secrets.FOOTBALL_DATA_TOKEN }}
+          OWM_API_KEY: ${{ secrets.OWM_API_KEY }}
         run: |
-          if [ -n "$FOOTBALL_DATA_TOKEN" ]; then
-            printf 'football_data_token: "%s"\n' "$FOOTBALL_DATA_TOKEN" > config.local.yaml
-          fi
+          {
+            [ -n "$FOOTBALL_DATA_TOKEN" ] && echo "football_data_token: \"$FOOTBALL_DATA_TOKEN\""
+            [ -n "$OWM_API_KEY" ] && echo "owm_api_key: \"$OWM_API_KEY\""
+          } > config.local.yaml
       - name: Run prediction
         env:
           TZ: 'Asia/Shanghai'
-        run: python main.py
+          OWM_API_KEY: ${{ secrets.OWM_API_KEY }}
+        run: python main.py --min-confidence 0.40
       - uses: actions/upload-artifact@v4
         if: always()
         with:
