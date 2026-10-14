@@ -87,6 +87,46 @@ def _parse_score(score) -> Tuple[int, int]:
     return 0, 0
 
 
+def _extract_team_goals(match: dict, team_name: str = "") -> int:
+    """从近期比赛里提取"该队"的进球数"""
+    h, a = _parse_score(_pick(match, "score", "scoreStr", "ft_score", "比分"))
+
+    team_a = match.get("team_A_name", "") or match.get("home", "") or match.get("主队", "")
+    team_b = match.get("team_B_name", "") or match.get("away", "") or match.get("客队", "")
+
+    if team_name:
+        if team_name in str(team_a):
+            return h
+        if team_name in str(team_b):
+            return a
+
+    # 退化：用 main_team / 主场字段
+    if match.get("main_team") == "team_B":
+        return a
+    # 默认：如果该队是主队（home/主队 在队名里），返回 h
+    home_name = match.get("home", "") or match.get("主队", "") or match.get("team_A_name", "")
+    if team_name and team_name in str(home_name):
+        return h
+    return h
+
+
+def _is_home_match(match: dict, team_name: str = "") -> bool:
+    """判断"该队"在这场是否为主队"""
+    team_a = match.get("team_A_name", "") or match.get("home", "") or match.get("主队", "")
+    team_b = match.get("team_B_name", "") or match.get("away", "") or match.get("客队", "")
+
+    if team_name:
+        if team_name in str(team_a):
+            return True
+        if team_name in str(team_b):
+            return False
+
+    home_name = match.get("home", "") or match.get("主队", "") or match.get("team_A_name", "")
+    if team_name and team_name in str(home_name):
+        return True
+    return match.get("main_team") != "team_B"
+
+
 def _pick(d, *keys, default=None):
     if not isinstance(d, dict):
         return default
@@ -435,37 +475,63 @@ def _parse_hhad_odds(match: dict) -> Dict[str, float]:
 
 
 # ========== 比分（方向6+7+8） ==========
-def calc_score(history: Dict, wdl_recommendation: str = None,
+def calc_score(history: Dict, home: str = "", away: str = "",
+               wdl_recommendation: str = None,
                weather: Dict = None, referee: Dict = None) -> Dict[str, float]:
-    def avg_goals(matches, side="home"):
-        """side='home' 统计主队进球，side='away' 统计客队进球"""
+    """V5：区分该队在主场的进球率 / 客场进球率"""
+    def collect_goals(matches, team_name, want_home: bool):
         if matches is None:
-            return 1.5 if side == "home" else 1.2
+            return []
         if hasattr(matches, "empty") and matches.empty:
-            return 1.5 if side == "home" else 1.2
+            return []
         if hasattr(matches, "iterrows"):
             matches = [row.to_dict() for _, row in matches.iterrows()]
         if not matches:
-            return 1.5 if side == "home" else 1.2
-
-        total, n = 0, 0
+            return []
+        goals = []
         for m in matches:
-            sc = _pick(m, "score", "scoreStr", "ft_score", "比分")
-            h, a = _parse_score(sc)
-            total += h if side == "home" else a
-            n += 1
+            if not isinstance(m, dict):
+                continue
+            is_home = _is_home_match(m, team_name)
+            if is_home != want_home:
+                continue
+            goals.append(_extract_team_goals(m, team_name))
+        return goals
 
-        if n == 0:
-            return 1.5 if side == "home" else 1.2
-        avg = total / n
-        # ✅ 提高下限：避免 λ 坍缩
-        return max(1.2 if side == "home" else 0.9, avg)
+    def _to_list(matches):
+        if matches is None:
+            return []
+        if hasattr(matches, "empty") and matches.empty:
+            return []
+        if hasattr(matches, "iterrows"):
+            return [row.to_dict() for _, row in matches.iterrows()]
+        return list(matches) if matches else []
 
-    home_goals = avg_goals(history.get("home_recent", []), "home")
-    away_goals = avg_goals(history.get("away_recent", []), "away")
+    home_recent = _to_list(history.get("home_recent", []))
+    away_recent = _to_list(history.get("away_recent", []))
 
-    lam_h = home_goals * 1.1
-    lam_a = away_goals * 0.9
+    # 主队：优先"主场进球"，不足退化到全部
+    home_home_goals = collect_goals(home_recent, home, True)
+    home_all_goals = [_extract_team_goals(m, home) for m in home_recent]
+
+    # 客队：优先"客场进球"
+    away_away_goals = collect_goals(away_recent, away, False)
+    away_all_goals = [_extract_team_goals(m, away) for m in away_recent]
+
+    home_avg = (sum(home_home_goals) / len(home_home_goals)
+                if home_home_goals
+                else (sum(home_all_goals) / len(home_all_goals)
+                      if home_all_goals else 1.5))
+    away_avg = (sum(away_away_goals) / len(away_away_goals)
+                if away_away_goals
+                else (sum(away_all_goals) / len(away_all_goals)
+                      if away_all_goals else 1.0))
+
+    home_avg = max(1.2, min(2.5, home_avg))
+    away_avg = max(0.8, min(2.0, away_avg))
+
+    lam_h = home_avg * 1.1
+    lam_a = away_avg * 0.9
 
     if weather and weather.get("available"):
         factor = weather.get("goal_factor", 1.0)
@@ -497,43 +563,32 @@ def calc_score(history: Dict, wdl_recommendation: str = None,
         filtered = {k: round(v/total, 4) for k, v in filtered.items()}
     else:
         filtered = {"1:0": 0.30, "2:0": 0.25, "2:1": 0.20, "1:1": 0.15, "0:0": 0.10}
+
+    logger.info(f"  λ_h={lam_h:.2f} λ_a={lam_a:.2f} "
+                f"(主主场{len(home_home_goals)}场/客客场{len(away_away_goals)}场)")
     return filtered
 
 
 # ========== 总进球 ==========
-def calc_total_goals(history: Dict, weather: Dict = None, referee: Dict = None) -> Dict[str, float]:
-    def avg_home_goals(matches):
+def calc_total_goals(history: Dict, home: str = "", away: str = "",
+                     weather: Dict = None, referee: Dict = None) -> Dict[str, float]:
+    def team_goals(matches, team_name):
         if matches is None or (hasattr(matches, "empty") and matches.empty):
-            return 1.4
+            return []
         if hasattr(matches, "iterrows"):
             matches = [row.to_dict() for _, row in matches.iterrows()]
-        if not matches:
-            return 1.4
-        total, n = 0, 0
-        for m in matches:
-            h, a = _parse_score(_pick(m, "score", "scoreStr", "ft_score", "比分"))
-            total += h
-            n += 1
-        avg = total / max(1, n)
-        return max(0.7, avg)
+        return [_extract_team_goals(m, team_name) for m in matches if isinstance(m, dict)]
 
-    def avg_away_goals(matches):
-        if matches is None or (hasattr(matches, "empty") and matches.empty):
-            return 1.1
-        if hasattr(matches, "iterrows"):
-            matches = [row.to_dict() for _, row in matches.iterrows()]
-        if not matches:
-            return 1.1
-        total, n = 0, 0
-        for m in matches:
-            h, a = _parse_score(_pick(m, "score", "scoreStr", "ft_score", "比分"))
-            total += a
-            n += 1
-        avg = total / max(1, n)
-        return max(0.6, avg)
+    h_goals = team_goals(history.get("home_recent", []), home)
+    a_goals = team_goals(history.get("away_recent", []), away)
 
-    lam = avg_home_goals(history.get("home_recent", [])) * 1.1 \
-          + avg_away_goals(history.get("away_recent", [])) * 0.9
+    home_avg = (sum(h_goals) / len(h_goals)) if h_goals else 1.5
+    away_avg = (sum(a_goals) / len(a_goals)) if a_goals else 1.0
+
+    home_avg = max(1.2, min(2.5, home_avg))
+    away_avg = max(0.8, min(2.0, away_avg))
+
+    lam = home_avg * 1.1 + away_avg * 0.9
 
     if weather and weather.get("available"):
         lam *= weather.get("goal_factor", 1.0)
@@ -605,7 +660,8 @@ def analyze_match(match: Dict, history: Dict, intel: Dict,
     op = calc_odds_prob(intel)
     wdl = fuse_probabilities(hp, ip, op, league, history)
 
-    score_prob = calc_score(history, wdl_recommendation=wdl["推荐"],
+    score_prob = calc_score(history, home=home, away=away,
+                             wdl_recommendation=wdl["推荐"],
                              weather=weather, referee=referee)
     top_score = max(score_prob.items(), key=lambda x: x[1])
     score_str = top_score[0]
@@ -615,7 +671,8 @@ def analyze_match(match: Dict, history: Dict, intel: Dict,
     hf_pick = derive_half_full_from_score(score_str, wdl["推荐"])
 
     handicap_prob = calc_handicap(wdl, handicap)
-    total_prob = calc_total_goals(history, weather, referee)
+    total_prob = calc_total_goals(history, home=home, away=away,
+                                   weather=weather, referee=referee)
     hf_prob = calc_half_full(wdl)
 
     max_wdl = max(wdl["胜"], wdl["平"], wdl["负"])
