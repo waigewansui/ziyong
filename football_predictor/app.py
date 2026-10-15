@@ -109,11 +109,15 @@ with st.sidebar:
     )
     only_cold = st.checkbox("❄️ 只看冷门", value=False, key="only_cold")
 
+    cached_btn = st.button("⚡ 秒跑（用今日缓存）", use_container_width=True)
+
 
 # ============ 运行分析 ============
-if run_btn or rerun_btn:
+if run_btn or rerun_btn or cached_btn:
     cmd = [sys.executable, "main.py"]
-    if mode == "指定日期" and date_input:
+    if cached_btn and not (run_btn or rerun_btn):
+        cmd.append("--cached")
+    elif mode == "指定日期" and date_input:
         cmd += ["--date", date_input.strftime("%Y-%m-%d")]
     elif mode == "手动输入" and manual_text:
         cmd += ["--manual", manual_text]
@@ -136,6 +140,8 @@ if run_btn or rerun_btn:
             st.error("错误输出：")
             st.code(result.stderr, language="log")
 
+    from modules.error_helper import friendly_error
+
     if result.returncode == 0:
         st.success("✅ 分析完成！")
         # ✅ 保存结果供后续过滤/投注单使用
@@ -149,7 +155,9 @@ if run_btn or rerun_btn:
                 pass
         st.rerun()
     else:
-        st.error(f"❌ 分析失败，返回码 {result.returncode}")
+        st.error(friendly_error(result.stderr))
+        with st.expander("🔧 原始错误（点开贴给开发者）", expanded=False):
+            st.code(result.stderr or "(无 stderr)", language="log")
 
 
 # ============ 展示最新结果 ============
@@ -268,8 +276,9 @@ else:
 
         st.markdown("---")
         st.subheader("🎯 胜平负推荐（完整）")
-        st.dataframe(build_table("胜平负推荐", "胜平负概率", "真实赔率"),
-                     use_container_width=True, hide_index=True)
+
+        from modules.ui_cards import render_match_cards
+        render_match_cards(filtered, columns=2)
     with tab_hd:
         st.dataframe(build_table("让球推荐", "让球概率", "真实赔率_让球"),
                      use_container_width=True, hide_index=True)

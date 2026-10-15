@@ -79,6 +79,8 @@ def parse_args():
                    help="结算指定日期（默认昨天，格式 YYYY-MM-DD）")
     p.add_argument("--performance", action="store_true",
                    help="显示累计性能报告")
+    p.add_argument("--cached", action="store_true",
+                   help="使用今日缓存结果，不重新抓数据（仅重新渲染输出）")
     return p.parse_args()
 
 
@@ -123,6 +125,32 @@ def _print_performance(perf: dict):
 
 def main():
     args = parse_args()
+
+    # ========== 模式 0：缓存直读 ==========
+    if args.cached:
+        import glob as _glob
+        import json as _json
+        from datetime import datetime as _dt
+
+        today = _dt.now().strftime("%Y%m%d")
+        files = sorted(
+            _glob.glob(f"output/recommend_{today}_*.json"),
+            reverse=True,
+        )
+        if not files:
+            logger.error(f"❌ 今日 ({today}) 无缓存结果，请先正常跑一次")
+            return
+
+        logger.info(f"📂 命中今日缓存: {files[0]}")
+        with open(files[0], encoding="utf-8") as f:
+            results = _json.load(f)
+
+        from modules.output import output_all
+        output_all(results, bankroll=1000)
+        from modules.prediction_recorder import save_predictions
+        save_predictions(results)
+        logger.info(f"✅ 缓存重渲染完成，{len(results)} 场")
+        return
 
     # ========== 模式 1：结算 ==========
     if args.settle:
