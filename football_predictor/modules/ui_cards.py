@@ -1,17 +1,17 @@
-"""Streamlit 结果卡片渲染器"""
+"""Streamlit 结果卡片渲染器 —— 紧凑 HTML 版"""
 from typing import List, Dict
 
 
-def _conf_color(conf: float) -> str:
-    if conf >= 0.50:
+def _conf_icon(conf: float) -> str:
+    if conf >= 50:
         return "🟢"
-    if conf >= 0.40:
+    if conf >= 40:
         return "🟡"
     return "⚪"
 
 
-def render_match_cards(results: List[Dict], columns: int = 2):
-    """渲染比赛卡片网格"""
+def render_match_cards(results: List[Dict], columns: int = 3):
+    """渲染比赛卡片网格（3 列紧凑）"""
     import streamlit as st
 
     if not results:
@@ -20,7 +20,7 @@ def render_match_cards(results: List[Dict], columns: int = 2):
 
     rows = [results[i:i + columns] for i in range(0, len(results), columns)]
     for row in rows:
-        cols = st.columns(columns)
+        cols = st.columns(columns, gap="small")
         for col, r in zip(cols, row):
             with col:
                 _render_one_card(r)
@@ -39,27 +39,44 @@ def _render_one_card(r: Dict):
     stake = r.get("建议金额", "")
     odds_map = r.get("真实赔率", {}) or {}
     odds = odds_map.get(pick, "")
+    try:
+        odds_str = f"{float(odds):.2f}" if odds else "—"
+    except (ValueError, TypeError):
+        odds_str = "—"
 
-    cold_badge = " ❄️" if cold else ""
-    conf_icon = _conf_color(conf)
+    cold_badge = "❄️" if cold else ""
+    conf_icon = _conf_icon(conf)
+    stake_str = f"💰 {stake}元" if stake else ""
 
-    with st.container(border=True):
-        st.caption(f"{code} · {league}{cold_badge}")
-        st.markdown(f"**{vs}**")
-
-        c1, c2 = st.columns(2)
-        c1.metric("推荐", pick)
-        c2.metric("比分", score)
-
-        c3, c4 = st.columns(2)
-        if odds:
-            try:
-                c3.metric("赔率", f"{float(odds):.2f}")
-            except (ValueError, TypeError):
-                c3.metric("赔率", "—")
-        else:
-            c3.metric("赔率", "—")
-        c4.metric("置信", f"{conf_icon} {conf:.0f}%")
-
-        if stake:
-            st.caption(f"💰 建议 {stake} 元")
+    st.markdown(f"""
+    <div style="
+        border: 1px solid #2a2a2a;
+        border-left: 3px solid #FF4B4B;
+        border-radius: 6px;
+        padding: 8px 10px;
+        margin-bottom: 6px;
+        background: #161616;
+        font-size: 12px;
+        line-height: 1.45;
+    ">
+        <div style="color:#888; font-size:10px; margin-bottom:2px;">
+            {code} · {league} {cold_badge}
+        </div>
+        <div style="font-weight:600; font-size:13px; margin-bottom:4px;
+                    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+            {vs}
+        </div>
+        <div style="display:flex; justify-content:space-between;
+                    align-items:center; color:#ddd;">
+            <span>推荐 <b style="color:#FF4B4B; font-size:13px;">{pick}</b></span>
+            <span>比分 <b>{score}</b></span>
+        </div>
+        <div style="display:flex; justify-content:space-between;
+                    align-items:center; color:#aaa; font-size:11px;
+                    margin-top:3px;">
+            <span>赔率 {odds_str}</span>
+            <span>{conf_icon} {conf:.0f}%</span>
+            <span>{stake_str}</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)

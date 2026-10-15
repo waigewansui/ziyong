@@ -253,32 +253,41 @@ else:
             st.caption(f"🎯 过滤后 {len(filtered)} 场（原始 {len(results_raw)} 场）")
 
         slip_text = generate_slip(filtered, mode="single")
-        st.text_area("📋 投注单（点右上角 ⧉ 复制到竞彩 App）", slip_text,
-                     height=180, key="slip_text")
+        slip_parlay = generate_slip(filtered, mode="parlay")
+
+        # 🎯 主方案：st.code() 复制（深色主题下自带原生复制按钮，100% 可靠）
+        c1, c2 = st.columns(2)
+        with c1:
+            st.caption("📋 单场投注单（点右上角 ⧉ 复制）")
+            st.code(slip_text, language=None)
+        with c2:
+            st.caption("🔗 串关投注单（点右上角 ⧉ 复制）")
+            st.code(slip_parlay, language=None)
+
+        # 📎 备选：下载按钮（加 key/encode/charset 防失效）
         col_a, col_b = st.columns(2)
         with col_a:
             st.download_button(
-                "💾 下载投注单 .txt",
-                data=slip_text,
+                label="💾 下载投注单",
+                data=slip_text.encode("utf-8"),
                 file_name=f"betting_slip_{datetime.now().strftime('%Y%m%d')}.txt",
-                mime="text/plain",
-                use_container_width=True,
+                mime="text/plain; charset=utf-8",
+                key="dl_single_slip",
             )
         with col_b:
-            slip_parlay = generate_slip(filtered, mode="parlay")
             st.download_button(
-                "🔗 串关投注单",
-                data=slip_parlay,
+                label="🔗 下载串关",
+                data=slip_parlay.encode("utf-8"),
                 file_name=f"betting_parlay_{datetime.now().strftime('%Y%m%d')}.txt",
-                mime="text/plain",
-                use_container_width=True,
+                mime="text/plain; charset=utf-8",
+                key="dl_parlay_slip",
             )
 
         st.markdown("---")
         st.subheader("🎯 胜平负推荐（完整）")
 
         from modules.ui_cards import render_match_cards
-        render_match_cards(filtered, columns=2)
+        render_match_cards(filtered, columns=3)
     with tab_hd:
         st.dataframe(build_table("让球推荐", "让球概率", "真实赔率_让球"),
                      use_container_width=True, hide_index=True)
