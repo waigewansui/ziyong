@@ -43,37 +43,40 @@ def render_match_cards(results: List[Dict], columns: int = 6):
 
         cards_html.append(f"""
         <div style="
-            border:1px solid #2a2a2a;
+            border:1px solid #23263a;
             border-left:2px solid {dot};
-            border-radius:4px;
-            padding:5px 6px;
-            background:#161616;
-            font-size:10px;
-            line-height:1.35;
+            border-radius:6px;
+            padding:6px 8px;
+            background:#161822;
+            font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;
+            font-size:10.5px;
+            line-height:1.4;
             height:100%;
             box-sizing:border-box;
-        ">
-            <div style="color:#777; font-size:8px; margin-bottom:2px;
+            transition:border-color .15s, background .15s;
+        " onmouseover="this.style.borderColor='#FF4B4B';this.style.background='#1b1e2e'"
+           onmouseout="this.style.borderColor='#23263a';this.style.background='#161822'">
+            <div style="color:#7a8094; font-size:8px; margin-bottom:2px;
                         white-space:nowrap; overflow:hidden;
                         text-overflow:ellipsis;">
                 {code} · {league}{cold_tag}
             </div>
-            <div style="color:#eee; font-weight:600; font-size:10px;
-                        margin-bottom:3px; white-space:nowrap;
+            <div style="color:#e8eaf0; font-weight:600; font-size:11px;
+                        margin-bottom:4px; white-space:nowrap;
                         overflow:hidden; text-overflow:ellipsis;"
                  title="{vs}">
                 {vs_short}
             </div>
             <div style="display:flex; justify-content:space-between;
-                        color:#ddd; font-size:10px;">
-                <span style="color:#FF4B4B; font-weight:700;">{pick}</span>
-                <span>{score}</span>
+                        color:#c4c8d8; font-size:10.5px;">
+                <span style="color:#FF4B4B; font-weight:700; font-size:11px;">{pick}</span>
+                <span style="color:#b0b4c4; font-weight:500;">{score}</span>
             </div>
             <div style="display:flex; justify-content:space-between;
-                        color:#999; font-size:9px; margin-top:2px;">
+                        color:#8a90a4; font-size:9px; margin-top:3px;">
                 <span>{odds_str}</span>
-                <span style="color:{dot};">●{conf:.0f}%</span>
-                <span>{stake_str}</span>
+                <span style="color:{dot}; font-weight:600;">● {conf:.0f}%</span>
+                <span style="color:#9aa0b4;">{stake_str}</span>
             </div>
         </div>
         """)

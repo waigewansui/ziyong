@@ -19,7 +19,7 @@ os.chdir(BASE_DIR)
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-# 隐藏 Deploy 按钮和多余菜单
+# 隐藏 Deploy 按钮和多余菜单 + 全局字体排版
 st.set_page_config(
     page_title="足球竞猜智能推荐",
     page_icon="⚽",
@@ -27,8 +27,99 @@ st.set_page_config(
 )
 st.markdown("""
 <style>
-    .stDeployButton {display: none;}
-    footer {visibility: hidden;}
+    /* ====== 字体栈 ====== */
+    html, body, [class*="css"], .stApp {
+        font-family: -apple-system, BlinkMacSystemFont,
+            "PingFang SC", "Microsoft YaHei", "微软雅黑",
+            "Helvetica Neue", Arial, "Noto Sans SC", sans-serif;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+    }
+    code, pre, kbd, samp {
+        font-family: "JetBrains Mono", "Fira Code", "Cascadia Code",
+            Menlo, Consolas, "Microsoft YaHei Mono", monospace;
+    }
+
+    /* ====== 色盘微调 ====== */
+    .stApp { background: #0D0F13; }
+
+    /* ====== 标题层级 ====== */
+    h1, .stApp h1 { font-size: 1.75rem; font-weight: 700; letter-spacing: -0.01em; }
+    h2, .stApp h2 { font-size: 1.35rem; font-weight: 600; letter-spacing: -0.005em; }
+    h3, .stApp h3 { font-size: 1.15rem; font-weight: 600; }
+    .stMarkdown { font-size: 0.95rem; line-height: 1.6; }
+
+    /* ====== Metric / 概览卡片 ====== */
+    [data-testid="stMetric"] {
+        padding: 0.6rem 0.8rem;
+        background: #161822;
+        border: 1px solid #23263a;
+        border-radius: 10px;
+    }
+    [data-testid="stMetricLabel"] {
+        font-size: 0.75rem !important;
+        color: #9aa0b4 !important;
+        letter-spacing: 0.02em;
+    }
+    [data-testid="stMetricValue"] {
+        font-size: 1.6rem !important;
+        font-weight: 700 !important;
+        color: #FAFAFA !important;
+        letter-spacing: -0.02em;
+    }
+
+    /* ====== Tabs ====== */
+    [data-testid="stTabs"] [role="tablist"] {
+        gap: 4px;
+    }
+    [data-testid="stTabs"] [role="tab"] {
+        font-size: 0.88rem !important;
+        font-weight: 500;
+        padding: 0.45rem 0.9rem !important;
+        border-radius: 6px 6px 0 0;
+    }
+
+    /* ====== Dataframe ====== */
+    .stDataFrame {
+        font-size: 0.85rem !important;
+    }
+    .stDataFrame table th {
+        background: #161822 !important;
+        color: #c4c8d8 !important;
+        font-weight: 600 !important;
+        font-size: 0.8rem !important;
+    }
+    .stDataFrame table td {
+        padding: 0.35rem 0.5rem !important;
+    }
+
+    /* ====== Code block ====== */
+    pre {
+        border-radius: 8px !important;
+        border: 1px solid #23263a !important;
+        background: #0A0C12 !important;
+        font-size: 0.82rem !important;
+        line-height: 1.5 !important;
+    }
+    code { font-size: 0.85em; }
+
+    /* ====== Expander ====== */
+    [data-testid="stExpander"] {
+        border: 1px solid #23263a !important;
+        border-radius: 8px !important;
+    }
+
+    /* ====== Sidebar 间距 ====== */
+    section[data-testid="stSidebar"] .block-container {
+        padding-top: 1rem;
+        padding-bottom: 1rem;
+    }
+
+    /* ====== Hide ====== */
+    .stDeployButton { display: none; }
+    footer { visibility: hidden; }
+    #MainMenu { visibility: hidden; }
+    header { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
 
