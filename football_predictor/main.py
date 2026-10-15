@@ -180,7 +180,10 @@ def main():
 
             logger.info(f"[{idx+1}/{len(schedule)}] {home} vs {away} ({league})")
 
-            history = get_history(home, away, football_data_token=fd_token) or {}
+            # 2026-10-15 停用 fetch_history：football-data teams/{id}/matches 需付费 token，
+            # football-charts onrender 常年休眠，数据全部走 fetch_intel 懂球帝
+            # history = get_history(home, away, football_data_token=fd_token) or {}
+            history = {"h2h": [], "home_recent": [], "away_recent": []}
             intel = get_intel(home, away, league, match_id=match_id,
                               football_data_token=fd_token) or {}
 
