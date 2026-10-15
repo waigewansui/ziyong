@@ -145,7 +145,6 @@ def main():
         with open(files[0], encoding="utf-8") as f:
             results = _json.load(f)
 
-        from modules.output import output_all
         output_all(results, bankroll=1000)
         from modules.prediction_recorder import save_predictions
         save_predictions(results)

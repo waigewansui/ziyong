@@ -241,59 +241,101 @@ def save_csv(results: List[Dict], filepath: str):
 
 # ============ 串关生成 ============
 def generate_parlays(results: List[Dict], play_type: str = "胜平负",
-                     min_confidence: float = 0.45,
-                     max_n: int = 5, max_results: int = 20,
-                     bankroll: float = 1000.0) -> List[Dict]:
-    candidates = [r for r in results
-                  if float(r.get("置信度", 0)) >= min_confidence]
-    if len(candidates) < 2:
-        logger.warning(f"[{play_type}] 高置信度场次不足2场，跳过")
-        return []
+                     min_confidence: float = 0.30,     # 0.45 → 0.30 放宽候选
+                     max_n: int = 4,                    # 5 → 4 避免组合爆炸
+                     max_results: int = 20,
+                     bankroll: float = 1000.0,
+                     per_tier: int = 1) -> List[Dict]:  # 每档出几注
+    """
+    按分档独立生成串关（稳胆/稳健/搏冷/极端 各出 per_tier 注）
+    每档内的场次不与其他档共享（used_matches 全局去重）
+    """
+    # ---- 1. 按档位分池 ----
+    tier_pools: Dict[str, List[Dict]] = {}
+    used_matches: set = set()
 
-    picked = []
-    for r in candidates:
+    for r in results:
+        conf = float(r.get("置信度", 0))
+        if conf < min_confidence:
+            continue
         item = _pick_play(r, play_type, bankroll=bankroll)
-        if item and item["pick"] and item["prob"] > 0:
-            picked.append(item)
+        if not item or not item.get("pick") or item.get("prob", 0) <= 0:
+            continue
 
-    if len(picked) < 2:
+        mid = item.get("match_id", "")
+        if mid in used_matches:
+            continue
+        used_matches.add(mid)
+
+        tier = get_tier(conf)
+        tier_pools.setdefault(tier, []).append(item)
+
+    if not tier_pools:
+        logger.warning(f"[{play_type}] 无满足阈值（≥{min_confidence:.0%}）的场次，跳过串关")
         return []
 
+    # ---- 2. 每档独立组合 ----
     parlays = []
-    seen_combos = set()
-    for n in range(2, min(max_n + 1, len(picked) + 1)):
-        for combo in combinations(picked, n):
-            key = frozenset(c["match_id"] for c in combo)
-            if key in seen_combos:
-                continue
-            seen_combos.add(key)
-            odds_product = 1.0
-            prob_product = 1.0
-            for c in combo:
-                odds_product *= c["odds"]
-                prob_product *= c["prob"]
-            avg_conf = sum(c["confidence"] for c in combo) / n
-            tier = get_tier(avg_conf)
-            stake = TIER_STAKE.get(tier, 2)
-
-            parlays.append({
-                "串关方式": f"{n}串1",
-                "玩法": play_type,
-                "场次数": n,
-                "场次列表": [c["match_id"] for c in combo],
-                "投注内容": [format_bet_item(c["match_id"], play_type, c["pick"])
-                            for c in combo],
-                "推荐列表": [c["pick"] for c in combo],
-                "估算赔率": round(odds_product, 2),
-                "理论命中率": round(prob_product, 4),
-                "平均置信度": round(avg_conf, 4),
-                "投入": stake,
-                "满中收益": round(odds_product * stake, 2),
-                "分档": tier,
-            })
-
     tier_order = {"稳胆": 0, "稳健": 1, "搏冷": 2, "极端": 3}
+
+    for tier in ["稳胆", "稳健", "搏冷", "极端"]:
+        pool = tier_pools.get(tier, [])
+        if len(pool) < 2:
+            logger.info(f"[{play_type}] {tier}档仅 {len(pool)} 场，跳过（需≥2场）")
+            continue
+
+        # 按置信度降序取前 6 场（避免 C(20,4) 爆炸）
+        pool_sorted = sorted(pool, key=lambda x: -x["confidence"])
+        pool_top = pool_sorted[:6]
+
+        tier_parlays = []
+        for n in range(2, min(max_n + 1, len(pool_top) + 1)):
+            for combo in combinations(pool_top, n):
+                odds_product = 1.0
+                prob_product = 1.0
+                for c in combo:
+                    odds_product *= c["odds"]
+                    prob_product *= c["prob"]
+                avg_conf = sum(c["confidence"] for c in combo) / n
+                stake = TIER_STAKE.get(tier, 2)
+
+                parlays.append({
+                    "串关方式": f"{n}串1",
+                    "玩法": play_type,
+                    "场次数": n,
+                    "场次列表": [c["match_id"] for c in combo],   # 旧 key
+                    "场次编号列表": [c["match_id"] for c in combo],  # 新 key
+                    "投注内容": [format_bet_item(c["match_id"], play_type, c["pick"])
+                                for c in combo],
+                    "推荐列表": [c["pick"] for c in combo],   # 旧 key
+                    "推荐选项": [c["pick"] for c in combo],    # 新 key
+                    "估算赔率": round(odds_product, 2),
+                    "理论命中率": round(prob_product, 4),
+                    "平均置信度": round(avg_conf, 4),
+                    "投入": stake,                    # save_parlays 用
+                    "建议金额": stake,                 # 新 key
+                    "满中收益": round(odds_product * stake, 2),  # save_parlays 用
+                    "潜在收益": round(odds_product * stake, 2),   # 新 key
+                    "分档": tier,
+                })
+
+        if not tier_parlays:
+            continue
+
+        # 每档内部：优先选"场次数多 + 平均置信度高"的注
+        tier_parlays.sort(
+            key=lambda x: (-x["场次数"], -x["平均置信度"])
+        )
+        parlays.extend(tier_parlays[:per_tier])
+        logger.info(f"[{play_type}] {tier}档: 候选 {len(pool)} 场 → "
+                    f"出 {len(tier_parlays[:per_tier])} 注 (top6组合)")
+
+    # ---- 3. 全局按档位排序 ----
     parlays.sort(key=lambda x: (tier_order.get(x["分档"], 4), -x["平均置信度"]))
+    if parlays:
+        tiers_out = list({p["分档"] for p in parlays})
+        logger.info(f"[{play_type}] 串关共 {len(parlays)} 注 "
+                    f"（{tiers_out}）")
     return parlays[:max_results]
 
 
