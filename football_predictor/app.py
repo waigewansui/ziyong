@@ -346,14 +346,26 @@ else:
         slip_text = generate_slip(filtered, mode="single")
         slip_parlay = generate_slip(filtered, mode="parlay")
 
-        # 📋 上下布局，st.code 原生复制按钮
-        st.caption("📋 单场投注单（点右上角图标复制）")
-        st.code(slip_text, language=None, line_numbers=False)
+        # 📋 用 copy_block（100% 可复制，纯 HTML/JS 绕过 Streamlit 问题）
+        from modules.copy_widget import copy_block
+
+        st.caption("📋 单场投注单")
+        copy_block(
+            slip_text,
+            label="📋 复制单场投注单",
+            height=320,
+            key="slip_single",
+        )
 
         st.divider()
 
-        st.caption("🔗 串关推荐（点右上角图标复制）")
-        st.code(slip_parlay, language=None, line_numbers=False)
+        st.caption("🔗 串关推荐")
+        copy_block(
+            slip_parlay,
+            label="📋 复制串关推荐",
+            height=320,
+            key="slip_parlay",
+        )
 
         st.divider()
         st.subheader("🎯 胜平负推荐（完整）")
@@ -456,10 +468,19 @@ else:
     st.markdown("---")
     st.subheader("🎯 串关推荐")
     if parlay_files:
-        for pf in parlay_files[:6]:
+        from modules.copy_widget import copy_block
+        for i, pf in enumerate(parlay_files[:6]):
             with open(pf, "r", encoding="utf-8") as f:
-                with st.expander(os.path.basename(pf), expanded=False):
-                    st.markdown(f.read())
+                content = f.read()
+            name = os.path.basename(pf)
+            st.caption(f"📄 {name}")
+            copy_block(
+                content,
+                label=f"📋 复制 {name}",
+                height=400,
+                key=f"parlay_file_{i}",
+            )
+            st.divider()
     else:
         st.info("暂无串关推荐（可能置信度不足）")
 
