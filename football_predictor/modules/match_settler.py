@@ -145,16 +145,25 @@ def settle_batch(date_str: str) -> Dict:
             continue
         home, away = match_str.split(" vs ", 1)
 
-        # 让球盘口估算
-        real_odds = pred.get("真实赔率", {}) or {}
+        # ✅ 优先从快照读真实让球盘口
         handicap = 0.0
-        try:
-            h_odds = float(real_odds.get("胜", 0))
-            a_odds = float(real_odds.get("负", 0))
-            if h_odds > 0 and a_odds > 0:
-                handicap = -1.0 if h_odds < a_odds else 1.0
-        except Exception:
-            pass
+        raw_handicap = pred.get("让球", "")
+        if raw_handicap:
+            try:
+                handicap = float(str(raw_handicap).replace("+", "").strip())
+            except (ValueError, TypeError):
+                handicap = 0.0
+
+        # 兜底：快照没有让球字段时，从赔率反推
+        if handicap == 0.0:
+            real_odds = pred.get("真实赔率", {}) or {}
+            try:
+                h_odds = float(real_odds.get("胜", 0))
+                a_odds = float(real_odds.get("负", 0))
+                if h_odds > 0 and a_odds > 0:
+                    handicap = -1.0 if h_odds < a_odds else 1.0
+            except Exception:
+                pass
 
         real = fetch_real_result(pred.get("场次编号", ""), home, away)
         if not real:

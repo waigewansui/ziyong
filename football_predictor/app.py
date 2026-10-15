@@ -64,9 +64,14 @@ with st.sidebar:
 
     run_btn = st.button("🚀 开始分析", type="primary", use_container_width=True)
 
+    # ✅ 重新预测按钮
+    st.markdown("---")
+    st.caption("💡 结果不新鲜？点下方重新跑一次")
+    rerun_btn = st.button("🔄 重新预测", use_container_width=True)
+
 
 # ============ 运行分析 ============
-if run_btn:
+if run_btn or rerun_btn:
     cmd = [sys.executable, "main.py"]
     if mode == "指定日期" and date_input:
         cmd += ["--date", date_input.strftime("%Y-%m-%d")]
@@ -169,10 +174,10 @@ else:
             })
         return pd.DataFrame(rows)
 
-    # 5 个 Tab
-    tab_wdl, tab_hd, tab_score, tab_total, tab_hf, tab_hist, tab_bets = st.tabs(
+    # 8 个 Tab
+    tab_wdl, tab_hd, tab_score, tab_total, tab_hf, tab_hist, tab_bets, tab_perf = st.tabs(
         ["🎯 胜平负", "🔀 让球", "🎲 比分", "⚽ 总进球", "🔁 半全场",
-         "📅 历史", "💰 收益"]
+         "📅 历史", "💰 收益", "📈 模型命中率"]
     )
 
     with tab_wdl:
@@ -222,6 +227,53 @@ else:
             st.dataframe(df, use_container_width=True, hide_index=True)
         else:
             st.info("暂无投注记录")
+
+    with tab_perf:
+        st.subheader("📈 模型累计命中率")
+        from modules.performance_tracker import load_performance
+        perf = load_performance()
+
+        if perf.get("总场次", 0) == 0:
+            st.info("暂无结算数据。明天比赛踢完后，跑 `python main.py --settle` 即可。")
+        else:
+            st.caption(f"累计 {perf['总场次']} 场结算")
+
+            st.markdown("### 各玩法命中率")
+            plays_data = []
+            for play, s in perf["各玩法"].items():
+                plays_data.append({
+                    "玩法": play,
+                    "有效场次": s["有效场次"],
+                    "命中": s["命中"],
+                    "命中率": f"{s['命中率']:.2%}",
+                })
+            st.dataframe(plays_data, use_container_width=True, hide_index=True)
+
+            st.markdown("### 凯利模拟收益")
+            k = perf["凯利模拟"]
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("初始本金", f"{k['初始本金']}元")
+            col2.metric("最终余额", f"{k['最终余额']}元")
+            col3.metric("净盈亏", f"{k['净盈亏']}元")
+            col4.metric("ROI", f"{k['ROI']:.2%}")
+            st.caption(f"下注 {k['下注次数']} 次，命中 {k['命中次数']} 次，命中率 {k['命中率']:.2%}")
+
+        st.markdown("---")
+        st.caption("💡 结算昨天的预测：点下方按钮")
+        if st.button("🔍 结算昨天", use_container_width=True):
+            with st.spinner("正在结算..."):
+                result = subprocess.run(
+                    [sys.executable, "main.py", "--settle"],
+                    capture_output=True, text=True,
+                    encoding="utf-8", errors="replace", timeout=600,
+                )
+            with st.expander("📋 结算日志", expanded=True):
+                st.code(result.stdout or "(无输出)", language="log")
+            if result.returncode == 0:
+                st.success("✅ 结算完成，刷新页面查看最新命中率")
+                st.rerun()
+            else:
+                st.error(f"❌ 结算失败，返回码 {result.returncode}")
 
     # 串关
     st.markdown("---")

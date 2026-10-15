@@ -29,6 +29,7 @@ def save_predictions(results: List[Dict], date_str: str = None) -> str:
             "联赛": r.get("联赛", ""),
             "对阵": r.get("对阵", ""),
             "比赛时间": r.get("比赛时间", ""),
+            "让球": r.get("让球", ""),
             "胜平负推荐": r.get("胜平负推荐", ""),
             "胜平负概率": r.get("胜平负概率", {}),
             "让球推荐": r.get("让球推荐", ""),
