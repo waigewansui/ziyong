@@ -249,18 +249,23 @@ def poisson_probability(lam: float, k: int) -> float:
 
 # ========== 维度1：历史战绩（方向6：主客分离） ==========
 def calc_history_prob(history: Dict, home: str, away: str) -> Dict[str, float]:
-    h2h = history.get("h2h", {}) or {}
-    pct = h2h.get("percent", {}) or {}
-    if pct:
-        win_pct = _safe_float(str(pct.get("win", "0")).replace("%", "")) / 100.0
-        draw_pct = _safe_float(str(pct.get("draw", "0")).replace("%", "")) / 100.0
-        lose_pct = _safe_float(str(pct.get("lose", "0")).replace("%", "")) / 100.0
-        if win_pct + draw_pct + lose_pct > 0.5:
-            h2h_win, h2h_draw, h2h_lose = win_pct, draw_pct, lose_pct
+    h2h_raw = history.get("h2h", []) or []
+    # h2h 可能是 dict（懂球帝原始格式，有 percent）或 list（fetch_h2h 返回值）
+    if isinstance(h2h_raw, dict):
+        pct = h2h_raw.get("percent", {}) or {}
+        if pct:
+            win_pct = _safe_float(str(pct.get("win", "0")).replace("%", "")) / 100.0
+            draw_pct = _safe_float(str(pct.get("draw", "0")).replace("%", "")) / 100.0
+            lose_pct = _safe_float(str(pct.get("lose", "0")).replace("%", "")) / 100.0
+            if win_pct + draw_pct + lose_pct > 0.5:
+                h2h_win, h2h_draw, h2h_lose = win_pct, draw_pct, lose_pct
+            else:
+                h2h_win, h2h_draw, h2h_lose = _h2h_from_team(h2h_raw, home)
         else:
-            h2h_win, h2h_draw, h2h_lose = _h2h_from_team(h2h, home)
+            h2h_win, h2h_draw, h2h_lose = _h2h_from_team(h2h_raw, home)
     else:
-        h2h_win, h2h_draw, h2h_lose = _h2h_from_team(h2h, home)
+        # list 格式：直接统计
+        h2h_win, h2h_draw, h2h_lose = _h2h_from_team(h2h_raw, home)
 
     home_rate = _recent_rate(history.get("home_recent", []), want="home")
     away_rate = _recent_rate(history.get("away_recent", []), want="away_reversed")
@@ -273,8 +278,40 @@ def calc_history_prob(history: Dict, home: str, away: str) -> Dict[str, float]:
 
 
 def _h2h_from_team(h2h, home):
-    team_a = h2h.get("team_A", {}) or {}
-    team_b = h2h.get("team_B", {}) or {}
+    """
+    从 H2H 数据推算胜平负比
+    h2h 可能是 dict（懂球帝原始 team_A/team_B 格式）或 list[dict]（fetch_h2h 返回值）
+    """
+    # ---- list 格式：遍历每场比赛统计 ----
+    if isinstance(h2h, list):
+        wins = draws = losses = 0
+        for m in h2h:
+            if not isinstance(m, dict):
+                continue
+            h, a = _parse_score(_pick(m, "score", "scoreStr", "ft_score"))
+            home_name = _pick(m, "主队", "home", "team_A_name", default="")
+            away_name = _pick(m, "客队", "away", "team_B_name", default="")
+            if home_name and home in home_name:
+                me, opp = h, a
+            elif away_name and home in away_name:
+                me, opp = a, h
+            else:
+                # 退化：home 队在 A 位置
+                me, opp = h, a
+            if me > opp:
+                wins += 1
+            elif me == opp:
+                draws += 1
+            else:
+                losses += 1
+        total = wins + draws + losses
+        if total <= 0:
+            return 0.33, 0.33, 0.34
+        return wins/total, draws/total, losses/total
+
+    # ---- dict 格式（懂球帝原始 team_A/team_B） ----
+    team_a = h2h.get("team_A", {}) if isinstance(h2h, dict) else {}
+    team_b = h2h.get("team_B", {}) if isinstance(h2h, dict) else {}
     a_name = _pick(team_a, "name", "team_name", default="")
     b_name = _pick(team_b, "name", "team_name", default="")
 
@@ -837,6 +874,12 @@ def analyze_match(match: Dict, history: Dict, intel: Dict,
     home = match.get("主队", "")
     away = match.get("客队", "")
     league = match.get("联赛", "")
+
+    # ✅ 防御：history 可能是 list（懂球帝降级时某些队无历史数据）
+    if not isinstance(history, dict):
+        history = {"h2h": {}, "home_recent": [], "away_recent": []}
+    if not isinstance(intel, dict):
+        intel = {}
 
     handicap = _safe_float(match.get("让球", 0))
     if handicap == 0:

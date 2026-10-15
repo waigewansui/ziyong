@@ -1,24 +1,88 @@
 """
 赛程获取模块
-支持：中国体彩网 / 本地文件 / 手动输入
+支持：中国体彩网 / 本地文件 / 手动输入 / 缓存 / 懂球帝降级
+
+降级链：
+  营业时间 (11:00~23:00) → 体彩 API
+  体彩失败              → 上次成功缓存
+  缓存也没              → 懂球帝热门联赛搜索
+  还不行                → 返回空
 """
 import os
 import re
+import json
 import time
 import random
 import logging
 import pandas as pd
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
 SPORTTERY_URL = "https://webapi.sporttery.cn/gateway/jc/football/getMatchCalculatorV1.qry"
 
+# 缓存路径
+CACHE_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "data"
+)
+SCHEDULE_CACHE = os.path.join(CACHE_DIR, "schedule_cache.json")
+
+# 营业时间（北京时间）：11:00 ~ 23:00
+SALES_START_HOUR = 11
+SALES_END_HOUR = 23
+
+# 懂球帝降级时搜索的热门球队（搜队名才返回比赛列表）
+DONGQIUDI_TEAMS = [
+    # 英超
+    "曼联", "曼城", "利物浦", "阿森纳", "切尔西", "热刺", "纽卡斯尔",
+    # 西甲
+    "皇家马德里", "巴塞罗那", "马德里竞技",
+    # 德甲
+    "拜仁慕尼黑", "多特蒙德", "勒沃库森",
+    # 意甲
+    "国际米兰", "AC米兰", "尤文图斯", "那不勒斯",
+    # 法甲
+    "巴黎圣日耳曼",
+    # 欧冠热门
+    "利物浦", "皇家马德里", "曼城",
+]
+
 WEEKDAY_MAP = {
     0: "周一", 1: "周二", 2: "周三", 3: "周四",
     4: "周五", 5: "周六", 6: "周日",
 }
+
+
+def is_sales_time() -> bool:
+    """判断当前是否在体彩竞彩营业时间（11:00 ~ 23:00 北京时间）"""
+    now = datetime.now()
+    return SALES_START_HOUR <= now.hour < SALES_END_HOUR
+
+
+def _save_cache(df: pd.DataFrame):
+    """把成功的赛程存成 JSON 缓存"""
+    try:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        df.to_json(SCHEDULE_CACHE, orient="records", force_ascii=False, indent=2)
+        logger.info(f"赛程已缓存: {SCHEDULE_CACHE} ({len(df)} 场)")
+    except Exception as e:
+        logger.warning(f"缓存赛程失败: {e}")
+
+
+def fetch_from_cache() -> pd.DataFrame:
+    """读取上次成功的赛程缓存"""
+    if not os.path.exists(SCHEDULE_CACHE):
+        return pd.DataFrame()
+    try:
+        with open(SCHEDULE_CACHE, "r", encoding="utf-8") as f:
+            rows = json.load(f)
+        if rows:
+            logger.info(f"📦 使用缓存赛程: {len(rows)} 场")
+            return pd.DataFrame(rows)
+    except Exception as e:
+        logger.warning(f"读取缓存失败: {e}")
+    return pd.DataFrame()
 
 
 def get_today_weekday() -> str:
@@ -55,7 +119,9 @@ def fetch_from_sporttery(date: str = None) -> pd.DataFrame:
                                 headers=headers, timeout=15)
             resp.raise_for_status()
             df = _parse_sporttery(resp.json())
-            logger.info(f"体彩网抓取成功，共 {len(df)} 场")
+            if not df.empty:
+                logger.info(f"体彩网抓取成功，共 {len(df)} 场")
+                _save_cache(df)  # ✅ 成功自动缓存
             return df
         except Exception as e:
             logger.warning(f"体彩网抓取失败 ({attempt+1}/3): {e}")
@@ -93,6 +159,60 @@ def _parse_sporttery(data: dict) -> pd.DataFrame:
                 })
     except Exception as e:
         logger.error(f"解析体彩数据失败: {e}")
+    return pd.DataFrame(rows)
+
+
+def fetch_from_dongqiudi_today() -> pd.DataFrame:
+    """
+    懂球帝降级：搜热门球队名，抓未来 3 天比赛
+    （注意：懂球帝 search 搜队名才返回 matches 列表，搜联赛名只返回球队）
+    """
+    try:
+        from modules.fetch_intel import dongqiudi_search
+    except Exception as e:
+        logger.warning(f"无法导入 dongqiudi_search: {e}")
+        return pd.DataFrame()
+
+    now = datetime.now()
+    date_range = [(now + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(4)]
+
+    rows = []
+    seen = set()
+
+    for team in DONGQIUDI_TEAMS:
+        try:
+            time.sleep(0.2)
+            results = dongqiudi_search(team)
+            for r in results:
+                # 跳过纯球队条目（没有 match_id）
+                if "_teams" in r and "match_id" not in r:
+                    continue
+                mid = r.get("match_id", "")
+                if not mid or mid in seen:
+                    continue
+                team_a = r.get("team_A_name", "")
+                team_b = r.get("team_B_name", "")
+                if not team_a or not team_b:
+                    continue
+                start = r.get("start_play", "") or ""
+                if not any(start.startswith(d) for d in date_range):
+                    continue
+                seen.add(mid)
+                rows.append({
+                    "场次编号": "",
+                    "联赛": r.get("competition_name", ""),
+                    "比赛时间": start,
+                    "主队": team_a,
+                    "客队": team_b,
+                    "match_id": mid,
+                })
+        except Exception as e:
+            logger.debug(f"懂球帝搜索 {team} 失败: {e}")
+            continue
+
+    if rows:
+        date_str = f"{date_range[0]}~{date_range[-1]}"
+        logger.info(f"🏟️ 懂球帝降级获取 {len(rows)} 场（{date_str}）")
     return pd.DataFrame(rows)
 
 
@@ -245,7 +365,15 @@ def fetch_from_manual(text: str) -> pd.DataFrame:
 
 def get_schedule(date: str = None, filepath: str = None,
                  manual_text: str = None) -> pd.DataFrame:
-    """统一入口：按优先级获取赛程"""
+    """
+    统一入口：按优先级获取赛程
+
+    降级链：
+      1. 手动输入 / 本地文件（最优先）
+      2. 体彩官网（营业时间 11:00~23:00）
+      3. 上次成功缓存（营业时间外或体彩失败）
+      4. 懂球帝热门联赛搜索（最后兜底）
+    """
     if manual_text:
         logger.info("使用手动输入赛程")
         return fetch_from_manual(manual_text)
@@ -254,12 +382,28 @@ def get_schedule(date: str = None, filepath: str = None,
         logger.info(f"使用本地文件: {filepath}")
         return fetch_from_file(filepath)
 
-    logger.info("尝试从体彩官网获取赛程")
-    df = fetch_from_sporttery(date)
+    # 步骤 1：尝试体彩官网（仅营业时间）
+    if is_sales_time():
+        logger.info("⏰ 营业时间内，尝试体彩官网")
+        df = fetch_from_sporttery(date)
+        if not df.empty:
+            return df
+        logger.info("体彩官网失败，尝试降级...")
+    else:
+        logger.info(f"🌙 非营业时间（{datetime.now().strftime('%H:%M')}），跳过体彩官网")
+
+    # 步骤 2：缓存（上次成功的体彩赛程）
+    df = fetch_from_cache()
     if not df.empty:
         return df
 
-    logger.error("所有数据源均失败，请手动输入")
+    # 步骤 3：懂球帝热门联赛搜索
+    logger.info("缓存也没，降级懂球帝热门联赛搜索...")
+    df = fetch_from_dongqiudi_today()
+    if not df.empty:
+        return df
+
+    logger.error("所有降级链均失败")
     return pd.DataFrame()
 
 

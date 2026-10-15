@@ -19,6 +19,12 @@ output/
 !output/.gitkeep
 *.log
 
+# === Runtime ===
+data/schedule_cache.json
+data/bets.json
+data/today.txt
+!data/team_aliases.json
+
 # === IDE ===
 .vscode/
 .idea/
