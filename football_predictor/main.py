@@ -73,6 +73,12 @@ def parse_args():
                    help="最低置信度过滤（默认 0.40）")
     p.add_argument("--no-filter", action="store_true",
                    help="关闭置信度和共振过滤")
+    p.add_argument("--settle", action="store_true",
+                   help="结算模式：拉真实比分 + 命中率")
+    p.add_argument("--settle-date", type=str, default=None,
+                   help="结算指定日期（默认昨天，格式 YYYY-MM-DD）")
+    p.add_argument("--performance", action="store_true",
+                   help="显示累计性能报告")
     return p.parse_args()
 
 
@@ -100,8 +106,45 @@ def is_resonance(result) -> bool:
     return pick == min_odds_pick
 
 
+def _print_performance(perf: dict):
+    """打印性能报告"""
+    logger.info("=" * 60)
+    logger.info("📊 累计性能报告")
+    logger.info("=" * 60)
+    logger.info(f"  累计场次: {perf.get('总场次', 0)}")
+    for play, s in perf.get("各玩法", {}).items():
+        logger.info(f"  {play}: {s['命中']}/{s['有效场次']} = {s['命中率']:.2%}")
+    k = perf.get("凯利模拟", {})
+    logger.info(f"  凯利模拟: 下注{k.get('下注次数',0)}次  命中{k.get('命中率',0):.2%}  "
+                f"ROI {k.get('ROI',0):.2%}  净盈亏 {k.get('净盈亏',0)}  "
+                f"(本金{k.get('初始本金',0)}→{k.get('最终余额',0)})")
+    logger.info("=" * 60)
+
+
 def main():
     args = parse_args()
+
+    # ========== 模式 1：结算 ==========
+    if args.settle:
+        from modules.match_settler import settle_batch
+        from modules.performance_tracker import compute_performance
+        from datetime import datetime, timedelta
+
+        date_str = args.settle_date or (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        logger.info(f"🔍 结算模式：{date_str}")
+        settle_batch(date_str)
+        perf = compute_performance()
+        _print_performance(perf)
+        return
+
+    # ========== 模式 2：性能报告 ==========
+    if args.performance:
+        from modules.performance_tracker import compute_performance
+        perf = compute_performance()
+        _print_performance(perf)
+        return
+
+    # ========== 正常预测模式 ==========
     logger.info("=" * 60)
     logger.info("数据查询分析系统 v4.0")
     logger.info("=" * 60)
@@ -255,6 +298,10 @@ def main():
                     f"{weather_desc:<12} {referee_name:<8} {dq:<10}")
     logger.info("=" * 120)
     logger.info(f"完成！原始 {original_count} 场 → 过滤后 {len(results)} 场")
+
+    # ✅ 保存预测快照（供次日结算）
+    from modules.prediction_recorder import save_predictions
+    save_predictions(results)
 
 
 if __name__ == "__main__":
