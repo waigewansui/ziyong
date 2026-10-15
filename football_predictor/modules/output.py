@@ -400,9 +400,44 @@ def save_parlays(parlays: List[Dict], filepath: str,
 def output_all(results: List[Dict], output_dir: str = "output",
                play_types: List[str] = None,
                min_confidence: float = 0.45,
-               bankroll: float = 1000.0) -> Dict[str, Any]:
+               bankroll: float = 1000.0,
+               max_daily_pct: float = 0.15) -> Dict[str, Any]:
     os.makedirs(output_dir, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # ✅ 先算每场建议金额（写入 results dict，供上限控制 + UI 使用）
+    for r in results:
+        if r.get("建议金额"):
+            continue
+        wdl = r.get("胜平负概率", {}) or {}
+        top_prob = max(wdl.values()) if wdl else 0
+        if top_prob < min_confidence:
+            r["建议金额"] = 0
+            continue
+        pick = r.get("胜平负推荐", "")
+        real_odds = r.get("真实赔率", {}) or {}
+        try:
+            odds = float(real_odds.get(pick, 0)) or prob_to_odds(top_prob)
+        except Exception:
+            odds = prob_to_odds(top_prob)
+        k = kelly_stake(top_prob, odds, bankroll)
+        r["建议金额"] = k["stake_final"]
+
+    # ✅ 单日总投注上限
+    total_stake = sum(r.get("建议金额", 0) for r in results)
+    cap = bankroll * max_daily_pct
+
+    if total_stake > cap:
+        ratio = cap / total_stake
+        for r in results:
+            if r.get("建议金额"):
+                r["建议金额"] = round(r["建议金额"] * ratio, 1)
+        logger.warning(
+            f"⚠️ 单日总投注 {total_stake:.0f}元 超上限 {cap:.0f}元，"
+            f"按 {ratio:.2f} 比例缩减"
+        )
+    else:
+        logger.info(f"💰 单日总投注 {total_stake:.0f}元 / 上限 {cap:.0f}元")
 
     save_markdown(results, os.path.join(output_dir, f"recommend_{ts}.md"),
                   bankroll=bankroll)

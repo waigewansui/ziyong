@@ -951,6 +951,19 @@ def analyze_match(match: Dict, history: Dict, intel: Dict,
     max_wdl = max(wdl["胜"], wdl["平"], wdl["负"])
     confidence = round(max_wdl * 0.6 + top_score[1] * 0.4, 4)
 
+    # ✅ 冷门判定：模型概率 显著高于 市场隐含概率
+    cold = False
+    try:
+        real_odds = _extract_real_odds(intel) or {}
+        pick = wdl["推荐"]
+        if pick and real_odds.get(pick):
+            market_prob = 1.0 / float(real_odds[pick])
+            model_prob = {"胜": wdl["胜"], "平": wdl["平"], "负": wdl["负"]}.get(pick, 0)
+            if model_prob > market_prob * 1.2 and model_prob > 0.35:
+                cold = True
+    except Exception:
+        pass
+
     return {
         "场次编号": match.get("场次编号", ""),
         "联赛": league,
@@ -968,6 +981,7 @@ def analyze_match(match: Dict, history: Dict, intel: Dict,
         "半全场推荐": hf_pick,
         "半全场概率": hf_prob,
         "置信度": confidence,
+        "冷门": cold,
         "维度分解": {"历史": hp, "情报": ip, "赔率": op, "权重": get_weights(league)},
         "真实赔率": _extract_real_odds(intel),
         "真实赔率_让球": _parse_hhad_odds(match),

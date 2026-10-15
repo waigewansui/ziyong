@@ -34,6 +34,25 @@ st.markdown("""
 
 st.title("⚽ 足球竞猜智能推荐系统")
 
+# ✅ 今日概览
+try:
+    files_overview = sorted(glob.glob("output/recommend_*.json"), reverse=True)
+    if files_overview:
+        with open(files_overview[0], encoding="utf-8") as f:
+            latest_overview = json.load(f)
+        total = len(latest_overview)
+        high_conf = sum(1 for r in latest_overview if r.get("置信度", 0) >= 0.45)
+        cold_count = sum(1 for r in latest_overview if r.get("冷门"))
+        total_stake = sum(float(r.get("建议金额", 0) or 0) for r in latest_overview)
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("📊 场次", total)
+        c2.metric("🔥 高置信 (≥45%)", high_conf)
+        c3.metric("❄️ 冷门", cold_count)
+        c4.metric("💰 建议总投注", f"{total_stake:.0f}元")
+except Exception:
+    pass
+
 
 # ============ 侧边栏 ============
 with st.sidebar:
@@ -69,6 +88,27 @@ with st.sidebar:
     st.caption("💡 结果不新鲜？点下方重新跑一次")
     rerun_btn = st.button("🔄 重新预测", use_container_width=True)
 
+    # ✅ 关注过滤
+    st.markdown("---")
+    st.subheader("🎯 关注过滤")
+
+    from modules.team_filter import POPULAR_TEAMS
+    watch_teams = st.multiselect(
+        "只看这些队（留空=全部）",
+        options=POPULAR_TEAMS,
+        default=[],
+        key="watch_teams",
+    )
+    watch_leagues = st.multiselect(
+        "只看这些联赛",
+        options=["英超", "西甲", "意甲", "德甲", "法甲",
+                 "欧冠", "欧联", "亚冠", "日联赛杯", "美职",
+                 "解放者杯", "英冠"],
+        default=[],
+        key="watch_leagues",
+    )
+    only_cold = st.checkbox("❄️ 只看冷门", value=False, key="only_cold")
+
 
 # ============ 运行分析 ============
 if run_btn or rerun_btn:
@@ -98,6 +138,15 @@ if run_btn or rerun_btn:
 
     if result.returncode == 0:
         st.success("✅ 分析完成！")
+        # ✅ 保存结果供后续过滤/投注单使用
+        import glob
+        files = sorted(glob.glob("output/recommend_*.json"), reverse=True)
+        if files:
+            try:
+                with open(files[0], encoding="utf-8") as f:
+                    st.session_state["latest_results"] = json.load(f)
+            except Exception:
+                pass
         st.rerun()
     else:
         st.error(f"❌ 分析失败，返回码 {result.returncode}")
@@ -181,6 +230,44 @@ else:
     )
 
     with tab_wdl:
+        # ✅ 过滤器 + 投注单 + 结果表
+        from modules.betting_slip import generate_slip
+        from modules.team_filter import filter_results
+
+        results_raw = st.session_state.get("latest_results", []) or results
+        filtered = filter_results(
+            results_raw,
+            teams=set(watch_teams) if watch_teams else None,
+            leagues=set(watch_leagues) if watch_leagues else None,
+            only_cold=only_cold,
+        )
+        if only_cold or watch_teams or watch_leagues:
+            st.caption(f"🎯 过滤后 {len(filtered)} 场（原始 {len(results_raw)} 场）")
+
+        slip_text = generate_slip(filtered, mode="single")
+        st.text_area("📋 投注单（点右上角 ⧉ 复制到竞彩 App）", slip_text,
+                     height=180, key="slip_text")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.download_button(
+                "💾 下载投注单 .txt",
+                data=slip_text,
+                file_name=f"betting_slip_{datetime.now().strftime('%Y%m%d')}.txt",
+                mime="text/plain",
+                use_container_width=True,
+            )
+        with col_b:
+            slip_parlay = generate_slip(filtered, mode="parlay")
+            st.download_button(
+                "🔗 串关投注单",
+                data=slip_parlay,
+                file_name=f"betting_parlay_{datetime.now().strftime('%Y%m%d')}.txt",
+                mime="text/plain",
+                use_container_width=True,
+            )
+
+        st.markdown("---")
+        st.subheader("🎯 胜平负推荐（完整）")
         st.dataframe(build_table("胜平负推荐", "胜平负概率", "真实赔率"),
                      use_container_width=True, hide_index=True)
     with tab_hd:
