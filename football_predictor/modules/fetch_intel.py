@@ -85,20 +85,23 @@ TEAM_ALIASES: Dict[str, List[str]] = {
 def _safe_get(url: str, params: dict = None, retry: int = 2,
               timeout: int = 8) -> Optional[dict]:
     """
-    带重试的 JSON 请求（优化版）
-    - retry: 2 次重试
-    - timeout: 8 秒超时（防止长时间卡住）
-    - 打印进度日志
+    带重试的 JSON 请求
+    ✅ 400/401/403 直接跳过不重试（重试也没用）
     """
     for i in range(retry):
         try:
             delay = random.uniform(0.3, 0.8)
-            logger.info(f"请求 ({i+1}/{retry}): {url[:80]}... 等待 {delay:.1f}s")
             time.sleep(delay)
             resp = requests.get(url, headers=HEADERS, params=params, timeout=timeout)
-            if resp.status_code == 403:
-                logger.warning(f"403 被拒: {url[:80]}")
+
+            # ✅ 4xx 状态码短路
+            if resp.status_code == 400:
+                logger.debug(f"400 跳过（参数无效）: {url[:60]}")
                 return None
+            if resp.status_code in (401, 403):
+                logger.debug(f"{resp.status_code} 跳过（权限问题）: {url[:60]}")
+                return None
+
             resp.raise_for_status()
             return resp.json()
         except requests.Timeout:
@@ -107,7 +110,7 @@ def _safe_get(url: str, params: dict = None, retry: int = 2,
             logger.warning(f"连接错误 ({i+1}/{retry}): {url[:80]} - {e}")
         except Exception as e:
             logger.warning(f"请求失败 ({i+1}/{retry}): {url[:80]} - {e}")
-    logger.error(f"请求彻底失败: {url[:80]}")
+    logger.debug(f"请求彻底失败: {url[:80]}")
     return None
 
 

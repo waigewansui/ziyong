@@ -60,6 +60,18 @@ CORE_ALIASES = {
     "墨胜利": ["melbourne victory"],
 }
 
+# ✅ 黑名单：明确禁止的误学组合（队名 substring 误匹配）
+BLACKLIST_ALIASES = {
+    "皇马": ["atl. madrid", "atletico", "atletico madrid"],
+    "马竞": ["real madrid", "barcelona"],
+    "巴萨": ["real madrid", "atletico madrid"],
+    "曼联": ["manchester city", "man city"],
+    "曼城": ["manchester united", "man united"],
+    "利物浦": ["everton"],
+    "国米": ["ac milan", "juventus"],
+    "AC米兰": ["inter", "inter milan", "juventus"],
+}
+
 
 class TeamNameResolver:
     """
@@ -92,7 +104,7 @@ class TeamNameResolver:
             logger.warning(f"队名缓存保存失败: {e}")
 
     def learn(self, cn_name: str, en_name: str):
-        """自动学习：中文名 → 英文别名（带双向检查，避免误学）"""
+        """自动学习：中文名 → 英文别名（带双向检查 + 黑名单，避免误学）"""
         if not cn_name or not en_name:
             return
         cn_name = cn_name.strip()
@@ -103,6 +115,12 @@ class TeamNameResolver:
             return
 
         en_lower = en_name.lower()
+
+        # ✅ 黑名单检查
+        for bad in BLACKLIST_ALIASES.get(cn_name, []):
+            if bad in en_lower:
+                logger.debug(f"跳过黑名单学习: {cn_name} ← {en_name}")
+                return
 
         # 检查 1：这个英文名是否已被"其他队"学过？
         for other_cn, aliases in self.aliases.items():

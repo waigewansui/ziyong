@@ -20,6 +20,31 @@ logger = logging.getLogger(__name__)
 # ========== 方向4：联赛细分权重 ==========
 DEFAULT_WEIGHTS = {"history": 0.40, "intel": 0.30, "odds": 0.30}
 
+# ✅ 联赛名归一化映射
+LEAGUE_NORMALIZE = {
+    # 五大联赛
+    "英格兰超级联赛": "英超", "英格兰冠军联赛": "英冠",
+    "西班牙甲级联赛": "西甲", "西班牙足球甲级联赛": "西甲",
+    "意大利甲级联赛": "意甲", "意大利足球甲级联赛": "意甲",
+    "德国甲级联赛": "德甲", "德国足球甲级联赛": "德甲",
+    "法国甲级联赛": "法甲", "法国足球甲级联赛": "法甲",
+    # 杯赛
+    "欧洲冠军联赛": "欧冠", "欧洲联赛": "欧联",
+    "欧罗巴": "欧联", "欧罗巴联赛": "欧联",
+    "欧协联": "欧协联", "欧洲协会联赛": "欧协联",
+    "亚足联冠军联赛": "亚冠", "亚足联冠军联赛精英": "亚冠精英",
+    "南美解放者杯": "解放者杯", "美国职业足球大联盟": "美职",
+    "荷兰甲级联赛": "荷甲", "葡萄牙超级联赛": "葡超",
+    "日本联赛杯": "日联赛杯",
+}
+
+
+def normalize_league(name: str) -> str:
+    """联赛名归一化（懂球帝返回"欧罗巴"→统一成"欧联"）"""
+    if not name:
+        return ""
+    return LEAGUE_NORMALIZE.get(name, name)
+
 # 联赛场均进球（用于"对手防守强度"归一化）
 LEAGUE_AVG_GOALS = {
     "英超": 1.40, "西甲": 1.25, "意甲": 1.30,
@@ -81,6 +106,7 @@ LEAGUE_WEIGHTS = {
 
 
 def get_weights(league: str) -> Dict[str, float]:
+    league = normalize_league(league)
     return LEAGUE_WEIGHTS.get(league, DEFAULT_WEIGHTS)
 
 
@@ -683,8 +709,9 @@ def calc_score(history: Dict, home: str = "", away: str = "",
     away_attack = mean(a_goals, 1.2)
     away_defense = mean(a_conceded, 1.5)
 
-    league_avg = LEAGUE_AVG_GOALS.get(league, DEFAULT_LEAGUE_AVG)
-    home_adv = HOME_ADVANTAGE.get(league, DEFAULT_HOME_ADV)
+    league_norm = normalize_league(league)
+    league_avg = LEAGUE_AVG_GOALS.get(league_norm, DEFAULT_LEAGUE_AVG)
+    home_adv = HOME_ADVANTAGE.get(league_norm, DEFAULT_HOME_ADV)
 
     # L1：对手防守强度交叉 + 主场优势
     lam_h_raw = home_attack * (away_defense / league_avg) * home_adv
@@ -790,8 +817,9 @@ def calc_total_goals(history: Dict, home: str = "", away: str = "",
     away_attack = mean(a_goals, 1.2)
     away_defense = mean(a_conceded, 1.5)
 
-    league_avg = LEAGUE_AVG_GOALS.get(league, DEFAULT_LEAGUE_AVG)
-    home_adv = HOME_ADVANTAGE.get(league, DEFAULT_HOME_ADV)
+    league_norm = normalize_league(league)
+    league_avg = LEAGUE_AVG_GOALS.get(league_norm, DEFAULT_LEAGUE_AVG)
+    home_adv = HOME_ADVANTAGE.get(league_norm, DEFAULT_HOME_ADV)
 
     lam_h_raw = home_attack * (away_defense / league_avg) * home_adv
     lam_a_raw = away_attack * (home_defense / league_avg) * (2 - home_adv) * 0.95

@@ -32,21 +32,25 @@ SCHEDULE_CACHE = os.path.join(CACHE_DIR, "schedule_cache.json")
 SALES_START_HOUR = 11
 SALES_END_HOUR = 23
 
-# 懂球帝降级时搜索的热门球队（搜队名才返回比赛列表）
-DONGQIUDI_TEAMS = [
+# ✅ 覆盖五大联赛 + 亚冠 + J/K联赛 + 解放者杯 + 美职
+DONGQIUDI_TEAMS = list(dict.fromkeys([
     # 英超
-    "曼联", "曼城", "利物浦", "阿森纳", "切尔西", "热刺", "纽卡斯尔",
+    "曼联", "曼城", "利物浦", "阿森纳", "切尔西", "热刺",
     # 西甲
     "皇家马德里", "巴塞罗那", "马德里竞技",
-    # 德甲
-    "拜仁慕尼黑", "多特蒙德", "勒沃库森",
     # 意甲
-    "国际米兰", "AC米兰", "尤文图斯", "那不勒斯",
+    "国际米兰", "AC米兰", "尤文图斯", "罗马",
+    # 德甲
+    "拜仁慕尼黑", "多特蒙德", "莱比锡红牛",
     # 法甲
     "巴黎圣日耳曼",
-    # 欧冠热门
-    "利物浦", "皇家马德里", "曼城",
-]
+    # 亚冠/J联赛/K联赛
+    "神户胜利船", "横滨水手", "浦和红钻", "蔚山现代", "全北现代", "希拉尔",
+    # 解放者杯
+    "弗拉门戈", "帕尔梅拉斯", "弗鲁米嫩塞", "博卡青年",
+    # 美职
+    "迈阿密国际", "洛杉矶FC", "圣路易斯城",
+]))
 
 WEEKDAY_MAP = {
     0: "周一", 1: "周二", 2: "周三", 3: "周四",
@@ -61,28 +65,44 @@ def is_sales_time() -> bool:
 
 
 def _save_cache(df: pd.DataFrame):
-    """把成功的赛程存成 JSON 缓存"""
+    """📂 保存赛程到缓存（带日期标记）"""
     try:
         os.makedirs(CACHE_DIR, exist_ok=True)
-        df.to_json(SCHEDULE_CACHE, orient="records", force_ascii=False, indent=2)
-        logger.info(f"赛程已缓存: {SCHEDULE_CACHE} ({len(df)} 场)")
+        data = {
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "saved_at": datetime.now().isoformat(),
+            "matches": df.to_dict(orient="records"),
+        }
+        with open(SCHEDULE_CACHE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        logger.info(f"  💾 赛程已缓存: {len(df)} 场")
     except Exception as e:
-        logger.warning(f"缓存赛程失败: {e}")
+        logger.warning(f"缓存保存失败: {e}")
 
 
 def fetch_from_cache() -> pd.DataFrame:
-    """读取上次成功的赛程缓存"""
+    """📂 读取缓存（带日期校验，过期直接忽略）"""
     if not os.path.exists(SCHEDULE_CACHE):
         return pd.DataFrame()
     try:
         with open(SCHEDULE_CACHE, "r", encoding="utf-8") as f:
-            rows = json.load(f)
-        if rows:
-            logger.info(f"📦 使用缓存赛程: {len(rows)} 场")
-            return pd.DataFrame(rows)
+            data = json.load(f)
+
+        cache_date = data.get("date", "")
+        today = datetime.now().strftime("%Y-%m-%d")
+        if cache_date != today:
+            logger.info(f"  ⏰ 缓存日期 {cache_date} ≠ 今天 {today}，忽略")
+            return pd.DataFrame()
+
+        matches = data.get("matches", [])
+        if not matches:
+            return pd.DataFrame()
+
+        logger.info(f"  📂 命中缓存: {len(matches)} 场 ({cache_date})")
+        return pd.DataFrame(matches)
     except Exception as e:
-        logger.warning(f"读取缓存失败: {e}")
-    return pd.DataFrame()
+        logger.warning(f"缓存读取失败: {e}")
+        return pd.DataFrame()
 
 
 def get_today_weekday() -> str:
@@ -213,6 +233,12 @@ def fetch_from_dongqiudi_today() -> pd.DataFrame:
     if rows:
         date_str = f"{date_range[0]}~{date_range[-1]}"
         logger.info(f"🏟️ 懂球帝降级获取 {len(rows)} 场（{date_str}）")
+
+    # ✅ 自动编号（降级赛程无场次编号）
+    for idx, row in enumerate(rows):
+        if not row.get("场次编号"):
+            row["场次编号"] = f"降{idx+1:03d}"
+
     return pd.DataFrame(rows)
 
 

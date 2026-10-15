@@ -24,9 +24,11 @@ from modules.fetch_history import get_history
 from modules.fetch_intel import get_intel
 from modules.fetch_weather import fetch_weather
 from modules.fetch_referee import fetch_referee
-from modules.team_name_resolver import get_resolver
 from modules.analyze import analyze_match
 from modules.output import output_all
+from modules.history_archiver import archive           # ✅ 移到顶部
+from modules.bets_tracker import summary as bet_summary  # ✅ 移到顶部
+from modules.team_name_resolver import get_resolver
 
 logging.basicConfig(
     level=logging.INFO,
@@ -139,6 +141,10 @@ def main():
             intel = get_intel(home, away, league, match_id=match_id,
                               football_data_token=fd_token) or {}
 
+            # ✅ 检查情报是否成功
+            if intel.get("source") == "none":
+                logger.warning(f"  ⚠️ {home} vs {away} 情报缺失（match_id 可能无效）")
+
             # 自动学习队名
             resolver = get_resolver()
             resolver.extract_and_learn(intel, home)
@@ -222,8 +228,6 @@ def main():
     output_all(results, output_dir=output_dir, bankroll=bankroll)
 
     # 归档
-    from modules.history_archiver import archive
-    from modules.bets_tracker import summary as bet_summary
     archive(output_dir)
 
     # 收益总结
