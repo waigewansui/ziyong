@@ -346,20 +346,20 @@ else:
         slip_text = generate_slip(filtered, mode="single")
         slip_parlay = generate_slip(filtered, mode="parlay")
 
-        # 🎯 st.code() 自带原生复制按钮（100% 可靠，不依赖 Streamlit 后端）
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("**📋 投注单（点右上角图标复制）**")
-            st.code(slip_text, language=None)
-        with c2:
-            st.markdown("**🔗 串关推荐（点右上角图标复制）**")
-            st.code(slip_parlay, language=None)
+        # 📋 上下布局，st.code 原生复制按钮
+        st.caption("📋 单场投注单（点右上角图标复制）")
+        st.code(slip_text, language=None, line_numbers=False)
 
-        st.markdown("---")
+        st.divider()
+
+        st.caption("🔗 串关推荐（点右上角图标复制）")
+        st.code(slip_parlay, language=None, line_numbers=False)
+
+        st.divider()
         st.subheader("🎯 胜平负推荐（完整）")
 
         from modules.ui_cards import render_match_cards
-        render_match_cards(filtered, columns=6)
+        render_match_cards(filtered, columns=5)
     with tab_hd:
         st.dataframe(build_table("让球推荐", "让球概率", "真实赔率_让球"),
                      use_container_width=True, hide_index=True)
