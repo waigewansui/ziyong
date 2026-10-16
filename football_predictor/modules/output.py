@@ -299,7 +299,7 @@ def generate_parlays(results: List[Dict], play_type: str = "胜平负",
                 avg_conf = sum(c["confidence"] for c in combo) / n
                 stake = TIER_STAKE.get(tier, 2)
 
-                parlays.append({
+                tier_parlays.append({
                     "串关方式": f"{n}串1",
                     "玩法": play_type,
                     "场次数": n,
