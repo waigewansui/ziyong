@@ -67,7 +67,23 @@ def fetch_real_result(match_id: str, home: str, away: str) -> Optional[Dict]:
         )
         if r.status_code == 200:
             for item in (r.json().get("matches", {}).get("data", []) or []):
-                if item.get("status") in ("Finished", "finished", "FT", "结束"):
+                status = item.get("status", "")
+                is_finished = status in ("Finished", "finished", "FT", "结束") or \
+                    (item.get("minute_period") == "FT") or \
+                    (status in ("Played", "played"))  # 懂球帝新字段
+                if is_finished:
+                    # 懂球帝把 score 拆成 fs_A / fs_B
+                    fs_a = item.get("fs_A", "")
+                    fs_b = item.get("fs_B", "")
+                    if fs_a and fs_b:
+                        try:
+                            h = int(fs_a)
+                            a = int(fs_b)
+                            return {"home_score": h, "away_score": a,
+                                    "score_str": f"{h}:{a}", "source": "search"}
+                        except (ValueError, TypeError):
+                            pass
+                    # 兜底：旧字段 score
                     score = item.get("score", "")
                     h, a = _parse_score(score)
                     if h is not None:
