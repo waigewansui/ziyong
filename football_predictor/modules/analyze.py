@@ -573,11 +573,11 @@ def calc_handicap(wdl: Dict, handicap: float) -> Dict:
 
     # 让球越大，"刚好赢/输 N 球"越难，中间档越窄
     if hc <= 1.0:
-        mid_ratio = 0.55
+        mid_ratio = 0.40
     elif hc <= 2.0:
-        mid_ratio = 0.35
+        mid_ratio = 0.25
     else:
-        mid_ratio = 0.15
+        mid_ratio = 0.10
 
     if handicap < 0:
         result = {
@@ -967,11 +967,11 @@ def analyze_match(match: Dict, history: Dict, intel: Dict,
                     key=lambda x: x[1])
     score_str = top_score[0]
 
-    handicap_pick = derive_handicap_from_score(score_str, handicap, wdl["推荐"])
+    # 让球推荐 = calc_handicap 的概率 argmax（不再从比分反推）
+    handicap_prob = calc_handicap(wdl, handicap)
+    handicap_pick = max(handicap_prob, key=handicap_prob.get)
     total_pick = derive_total_from_score(score_str)
     hf_pick = derive_half_full_from_score(score_str, wdl["推荐"])
-
-    handicap_prob = calc_handicap(wdl, handicap)
     total_prob = calc_total_goals(history, home=home, away=away, league=league,
                                    weather=weather, referee=referee)
     hf_prob = calc_half_full(wdl)
