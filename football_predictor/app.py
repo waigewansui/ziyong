@@ -392,118 +392,261 @@ else:
 
             st.caption(f"候选 {len(pool)} 场")
 
-            # --- 玩法 + 串数 ---
-            col_a, col_b = st.columns([2, 1])
-            with col_a:
-                play_type = st.selectbox(
-                    "玩法",
-                    ["胜平负", "让球", "比分", "总进球", "半全场", "混合"],
-                    key="parlay_play",
-                )
-            with col_b:
+            # --- 玩法切换（顶栏） ---
+            play_mode = st.radio(
+                "玩法",
+                ["胜平负", "让球胜平负", "比分", "总进球", "半全场", "混合过关"],
+                horizontal=True,
+                key="parlay_play_mode",
+            )
+            # 兼容旧 key 名
+            play_type_map = {
+                "胜平负": "胜平负", "让球胜平负": "让球",
+                "比分": "比分", "总进球": "总进球",
+                "半全场": "半全场", "混合过关": "混合",
+            }
+            play_type = play_type_map[play_mode]
+
+            # --- 官网风格：每场一行，行内胜/平/负按钮 ---
+            st.markdown("---")
+            st.caption("👆 每行点击一个结果（胜/平/负），选中后自动加入串关选单")
+
+            # 初始化选单：{match_id: {"pick": str, "play_type": str, "odds": float}}
+            cart_key = "parlay_cart"
+            if cart_key not in st.session_state:
+                st.session_state[cart_key] = {}
+
+            selected_rows = []  # 收集已选场次供后面计算
+            for idx, r in enumerate(pool):
+                code = r.get("场次编号", "")
+                league = r.get("联赛", "")
+                vs = r.get("对阵", "")
+                handicap = r.get("让球", "") or "0"
+
+                # --- 该行可选的玩法 + 三个按钮 ---
+                row_items = []  # [(玩法名, 选单key前缀, 赔率dict)]
+
+                if play_type in ("胜平负", "混合"):
+                    row_items.append((
+                        "胜平负", "had",
+                        r.get("真实赔率", {}) or {},
+                    ))
+                if play_type in ("让球", "混合"):
+                    row_items.append((
+                        f"让球({handicap})", "handicap",
+                        r.get("真实赔率_让球", {}) or {},
+                    ))
+
+                if not row_items:
+                    # 比分/总进球/半全场 — 展示模型推荐 + 赔率
+                    pick_map = {
+                        "比分": r.get("比分推荐", ""),
+                        "总进球": r.get("总进球推荐", ""),
+                        "半全场": r.get("半全场推荐", ""),
+                    }
+                    odds_key_map = {
+                        "比分": "真实赔率_比分",
+                        "总进球": "真实赔率_总进球",
+                        "半全场": "真实赔率_半全场",
+                    }
+                    pick_v = pick_map.get(play_type, "")
+                    odds_v = (r.get(odds_key_map.get(play_type, ""), {}) or {}).get(pick_v, "")
+                    try:
+                        odds_v = f"{float(odds_v):.2f}"
+                    except Exception:
+                        odds_v = "—"
+
+                    with st.container(border=True):
+                        st.markdown(f"**{code}** {vs}")
+                        st.caption(f"{league} · {play_type}推荐: **{pick_v}** @ {odds_v}")
+
+                        # 选/不选 开关
+                        cart_match_key = f"{code}_{play_type}"
+                        is_selected = st.session_state[cart_key].get(cart_match_key, {}).get("pick")
+                        if st.toggle(
+                            f"✅ 加入串关",
+                            value=bool(is_selected),
+                            key=f"toggle_{cart_match_key}",
+                        ):
+                            st.session_state[cart_key][cart_match_key] = {
+                                "pick": pick_v,
+                                "play_type": play_type,
+                                "odds": float(odds_v) if odds_v not in ("", "—") else 0,
+                                "row": r,
+                            }
+                            selected_rows.append(st.session_state[cart_key][cart_match_key])
+                        elif cart_match_key in st.session_state[cart_key]:
+                            del st.session_state[cart_key][cart_match_key]
+                    continue
+
+                # --- 胜平负 / 让球 按钮行 ---
+                with st.container(border=True):
+                    header_col, _ = st.columns([3, 1])
+                    with header_col:
+                        st.markdown(
+                            f"<div style='font-size:13px;'>"
+                            f"<b style='color:#FF4B4B;'>{code}</b> "
+                            f"<span style='color:#9aa0b4;'>{league}</span> "
+                            f"<b>{vs}</b> "
+                            f"<span style='color:#7a8094; font-size:11px;'>[让球 {handicap}]</span>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+
+                    for play_label, play_prefix, odds_dict in row_items:
+                        picks = ["胜", "平", "负"]
+                        # 让球玩法按钮标注"让胜/让平/让负"
+                        btns_label = {
+                            "胜平负": ["胜", "平", "负"],
+                            f"让球({handicap})": [f"让胜({handicap})", "让平", f"让负"],
+                        }[play_label]
+
+                        cart_match_key = f"{code}_{play_prefix}"
+                        current_pick = st.session_state[cart_key].get(cart_match_key, {}).get("pick")
+
+                        # 3 个按钮横排
+                        b1, b2, b3, b4 = st.columns([1, 1, 1, 2])
+                        b_clicked = None
+                        for i, (col, pick, bl) in enumerate(zip([b1, b2, b3], picks, btns_label)):
+                            odds_v = odds_dict.get(pick, "")
+                            try:
+                                odds_str = f"{float(odds_v):.2f}" if odds_v else "--"
+                            except Exception:
+                                odds_str = "--"
+
+                            is_active = (current_pick == pick)
+                            label = f"**{pick}** {odds_str}" if is_active else f"{pick} {odds_str}"
+                            btn_type = "primary" if is_active else "secondary"
+                            if col.button(
+                                label,
+                                key=f"btn_{cart_match_key}_{pick}",
+                                type=btn_type,
+                                use_container_width=True,
+                            ):
+                                b_clicked = pick
+
+                        # 处理点击（选中/取消）
+                        if b_clicked:
+                            odds_v = odds_dict.get(b_clicked, "")
+                            try:
+                                odds_f = float(odds_v) if odds_v else 0
+                            except Exception:
+                                odds_f = 0
+
+                            if current_pick == b_clicked:
+                                # 取消选中
+                                if cart_match_key in st.session_state[cart_key]:
+                                    del st.session_state[cart_key][cart_match_key]
+                            else:
+                                st.session_state[cart_key][cart_match_key] = {
+                                    "pick": b_clicked,
+                                    "play_type": play_label,
+                                    "odds": odds_f,
+                                    "row": r,
+                                }
+
+                    # 汇总到 selected_rows（当前所有选中的）
+                    for _k, _v in st.session_state[cart_key].items():
+                        if _k.startswith(f"{code}_"):
+                            selected_rows.append(_v)
+
+            # 已选列表去重（可能一个 row 两个玩法都选了）
+            seen_codes = set()
+            selected_dedup = []
+            for item in selected_rows:
+                row_ref = item.get("row", {})
+                c = row_ref.get("场次编号", "")
+                if c and c not in seen_codes:
+                    seen_codes.add(c)
+                    selected_dedup.append(item)
+            selected_rows = selected_dedup
+
+            # --- 串数 ---
+            st.divider()
+            col_n, col_stk = st.columns(2)
+            with col_n:
+                max_n_options = [n for n in [2, 3, 4, 5]
+                                 if n <= max(len(selected_rows), 2)]
+                default_idx = min(1, len(max_n_options) - 1)
                 parlay_n = st.selectbox(
                     "串数",
-                    [2, 3, 4, 5],
-                    index=1,
+                    max_n_options or [2],
+                    index=default_idx,
                     format_func=lambda x: f"{x}串1",
                     key="parlay_n",
                 )
-
-            # --- 场次多选 ---
-            st.markdown("**选择场次**")
-            options_map = {}
-            for r in pool:
-                code = r.get("场次编号", "")
-                vs = r.get("对阵", "")
-                if play_type == "混合":
-                    pick = (r.get("胜平负推荐", "") or r.get("让球推荐", "")
-                            or r.get("比分推荐", ""))
-                else:
-                    pick = r.get(f"{play_type}推荐", "")
-                odds_map = r.get("真实赔率", {}) or {}
-                odds = odds_map.get(pick, "")
-                try:
-                    odds_str = f"{float(odds):.2f}" if odds else "—"
-                except (ValueError, TypeError):
-                    odds_str = "—"
-                label = f"{code} {vs} → {pick} @ {odds_str}"
-                options_map[label] = r
-
-            selected_labels = st.multiselect(
-                "勾选参与串关的比赛",
-                options=list(options_map.keys()),
-                key="parlay_selected",
-            )
-            selected = [options_map[l] for l in selected_labels]
-
-            # --- 校验 ---
-            if len(selected) < parlay_n:
-                st.warning(f"已选 {len(selected)} 场，需要 {parlay_n} 场才能组成 {parlay_n}串1")
-            elif len(selected) > parlay_n:
-                st.info(f"已选 {len(selected)} 场，默认取前 {parlay_n} 场；或勾选下方用全部 {len(selected)} 场")
-                use_all = st.checkbox(
-                    f"用全部 {len(selected)} 场组成 {len(selected)}串1",
-                    value=False,
-                    key="parlay_use_all",
+            with col_stk:
+                stake = st.number_input(
+                    "投入（元）", min_value=2, max_value=10000,
+                    value=10, step=1, key="parlay_stake",
                 )
-                if use_all:
-                    parlay_n = len(selected)
 
-            # --- 实时计算 ---
-            if len(selected) >= 2:
-                combo = selected[:parlay_n] if len(selected) >= parlay_n else selected
+            # --- 选单实时显示 ---
+            cart_items = list(st.session_state[cart_key].values())
+            if not cart_items:
+                st.info("👈 点上面的胜/平/负按钮开始选择")
+            else:
+                # 组合：取前 parlay_n 场
+                combo = cart_items[:parlay_n] if len(cart_items) >= parlay_n else cart_items
                 total_odds = 1.0
-                picks_display = []
-                for r in combo:
-                    code = r.get("场次编号", "")
-                    vs = r.get("对阵", "")
-                    if play_type == "混合":
-                        pick = (r.get("胜平负推荐", "") or r.get("让球推荐", "")
-                                or r.get("比分推荐", ""))
-                    else:
-                        pick = r.get(f"{play_type}推荐", "")
-                    odds_map = r.get("真实赔率", {}) or {}
-                    o = odds_map.get(pick, "")
+                for it in combo:
                     try:
-                        total_odds *= float(o)
+                        if it.get("odds", 0) > 0:
+                            total_odds *= float(it["odds"])
                     except Exception:
                         pass
-                    picks_display.append(f"{code} {vs} → {pick} @ {o}")
 
-                st.divider()
-                st.markdown(f"**📊 已选 {len(combo)} 场，组成 {len(combo)}串1**")
-                for line in picks_display:
-                    st.markdown(f"- {line}")
-
-                c1, c2 = st.columns(2)
-                with c1:
-                    stake = st.number_input(
-                        "投入（元）", min_value=2, max_value=10000,
-                        value=10, step=1, key="parlay_stake",
+                st.markdown("#### 📝 选单")
+                for it in combo:
+                    row_r = it.get("row", {})
+                    c = row_r.get("场次编号", "")
+                    vs = row_r.get("对阵", "")
+                    ptype = it.get("play_type", "")
+                    pick = it.get("pick", "")
+                    odds_f = it.get("odds", 0)
+                    odds_s = f"{odds_f:.2f}" if odds_f else "--"
+                    st.markdown(
+                        f"- **{c}** {vs} → "
+                        f"<span style='color:#FF4B4B;font-weight:700;'>"
+                        f"{pick}</span> @ {odds_s} "
+                        f"<span style='color:#7a8094;'>[{ptype}]</span>",
+                        unsafe_allow_html=True,
                     )
-                with c2:
-                    st.metric("总赔率", f"{total_odds:.2f}")
 
-                c3, c4 = st.columns(2)
-                with c3:
-                    st.metric("预期收益", f"{total_odds * stake:.2f} 元")
-                with c4:
-                    st.metric("潜在盈利", f"{total_odds * stake - stake:.2f} 元")
+                c1, c2, c3 = st.columns(3)
+                c1.metric("选中场次", f"{len(combo)} / {parlay_n}串1")
+                c2.metric("总赔率", f"{total_odds:.2f}")
+                c3.metric("预期收益", f"{total_odds * stake:.2f} 元")
 
-                # --- 生成串关投注单 ---
-                if st.button("📋 生成串关投注单", key="gen_parlay"):
-                    slip = f"⚽ {len(combo)}串1 串关推荐\n"
-                    slip += "─" * 30 + "\n"
-                    for line in picks_display:
-                        slip += line + "\n"
-                    slip += "─" * 30 + "\n"
-                    slip += f"总赔率：{total_odds:.2f}\n"
-                    slip += f"投入：{stake} 元\n"
-                    slip += f"预期收益：{total_odds * stake:.2f} 元\n"
+                # 生成按钮
+                if len(combo) >= parlay_n:
+                    if st.button(
+                        f"📋 生成 {parlay_n}串1 投注单",
+                        key="gen_parlay",
+                        type="primary",
+                        use_container_width=True,
+                    ):
+                        slip = f"⚽ {len(combo)}串1 串关推荐\n"
+                        slip += "─" * 30 + "\n"
+                        for it in combo:
+                            row_r = it.get("row", {})
+                            c = row_r.get("场次编号", "")
+                            vs = row_r.get("对阵", "")
+                            pick = it.get("pick", "")
+                            odds_s = f"{it.get('odds', 0):.2f}" if it.get("odds") else "--"
+                            slip += f"{c} {vs} → {pick} @ {odds_s}\n"
+                        slip += "─" * 30 + "\n"
+                        slip += f"总赔率：{total_odds:.2f}\n"
+                        slip += f"投入：{stake} 元\n"
+                        slip += f"预期收益：{total_odds * stake:.2f} 元\n"
 
-                    from modules.copy_widget import copy_block
-                    copy_block(slip, label="📋 复制串关投注单",
-                               height=340, key="parlay_result")
+                        from modules.copy_widget import copy_block
+                        copy_block(
+                            slip, label="📋 复制串关投注单",
+                            height=340, key="parlay_result",
+                        )
+                else:
+                    st.warning(f"还差 {parlay_n - len(combo)} 场才能生成 {parlay_n}串1")
 
             st.divider()
 
