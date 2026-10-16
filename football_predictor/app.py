@@ -322,56 +322,35 @@ else:
             })
         return pd.DataFrame(rows)
 
-    # 8 个 Tab
-    tab_wdl, tab_hd, tab_score, tab_total, tab_hf, tab_hist, tab_bets, tab_perf = st.tabs(
-        ["🎯 胜平负", "🔀 让球", "🎲 比分", "⚽ 总进球", "🔁 半全场",
-         "📅 历史", "💰 收益", "📈 模型命中率"]
-    )
+    # 9 个 Tab（新增 🔗串关）
+    (tab_wdl, tab_hd, tab_score, tab_total, tab_hf,
+     tab_parlay, tab_hist, tab_bets, tab_perf) = st.tabs([
+        "🎯 胜平负", "🔀 让球", "🎲 比分", "⚽ 总进球", "🔁 半全场",
+        "🔗 串关", "📅 历史", "💰 收益", "📈 模型命中率",
+    ])
 
     with tab_wdl:
-        # ✅ 过滤器 + 投注单 + 结果表
-        from modules.betting_slip import generate_slip
+        st.subheader("🎯 胜平负推荐")
+
         from modules.team_filter import filter_results
+        results_latest = st.session_state.get("latest_results", [])
+        if not results_latest:
+            st.info("还没有结果，点左侧「开始分析」跑一次")
+        else:
+            watch_teams_s = st.session_state.get("watch_teams", [])
+            watch_leagues_s = st.session_state.get("watch_leagues", [])
+            only_cold_s = st.session_state.get("only_cold", False)
 
-        results_raw = st.session_state.get("latest_results", []) or results
-        filtered = filter_results(
-            results_raw,
-            teams=set(watch_teams) if watch_teams else None,
-            leagues=set(watch_leagues) if watch_leagues else None,
-            only_cold=only_cold,
-        )
-        if only_cold or watch_teams or watch_leagues:
-            st.caption(f"🎯 过滤后 {len(filtered)} 场（原始 {len(results_raw)} 场）")
+            filtered = filter_results(
+                results_latest,
+                teams=set(watch_teams_s),
+                leagues=set(watch_leagues_s),
+                only_cold=only_cold_s,
+            )
+            st.caption(f"过滤后 {len(filtered)} 场（原始 {len(results_latest)} 场）")
 
-        slip_text = generate_slip(filtered, mode="single")
-        slip_parlay = generate_slip(filtered, mode="parlay")
-
-        # 📋 用 copy_block（100% 可复制，纯 HTML/JS 绕过 Streamlit 问题）
-        from modules.copy_widget import copy_block
-
-        st.caption("📋 单场投注单")
-        copy_block(
-            slip_text,
-            label="📋 复制单场投注单",
-            height=320,
-            key="slip_single",
-        )
-
-        st.divider()
-
-        st.caption("🔗 串关推荐")
-        copy_block(
-            slip_parlay,
-            label="📋 复制串关推荐",
-            height=320,
-            key="slip_parlay",
-        )
-
-        st.divider()
-        st.subheader("🎯 胜平负推荐（完整）")
-
-        from modules.ui_cards import render_match_cards
-        render_match_cards(filtered, columns=5)
+            from modules.ui_cards import render_match_cards
+            render_match_cards(filtered, columns=5)
     with tab_hd:
         st.dataframe(build_table("让球推荐", "让球概率", "真实赔率_让球"),
                      use_container_width=True, hide_index=True)
@@ -384,6 +363,194 @@ else:
     with tab_hf:
         st.dataframe(build_table("半全场推荐", "半全场概率", "真实赔率_半全场"),
                      use_container_width=True, hide_index=True)
+
+    # ============================================================
+    # 🔗 串关 Tab
+    # ============================================================
+    with tab_parlay:
+        st.subheader("🔗 串关工具")
+
+        results_p = st.session_state.get("latest_results", [])
+        if not results_p:
+            st.info("还没有结果，先跑一次分析")
+        else:
+            # --- 场次来源切换 ---
+            source = st.radio(
+                "场次来源",
+                options=["从推荐结果选", "从全部 24 场选"],
+                horizontal=True,
+                key="parlay_source",
+            )
+
+            if source == "从推荐结果选":
+                wt = st.session_state.get("watch_teams", [])
+                wl = st.session_state.get("watch_leagues", [])
+                from modules.team_filter import filter_results as _f
+                pool = _f(results_p, teams=set(wt), leagues=set(wl))
+            else:
+                pool = results_p
+
+            st.caption(f"候选 {len(pool)} 场")
+
+            # --- 玩法 + 串数 ---
+            col_a, col_b = st.columns([2, 1])
+            with col_a:
+                play_type = st.selectbox(
+                    "玩法",
+                    ["胜平负", "让球", "比分", "总进球", "半全场", "混合"],
+                    key="parlay_play",
+                )
+            with col_b:
+                parlay_n = st.selectbox(
+                    "串数",
+                    [2, 3, 4, 5],
+                    index=1,
+                    format_func=lambda x: f"{x}串1",
+                    key="parlay_n",
+                )
+
+            # --- 场次多选 ---
+            st.markdown("**选择场次**")
+            options_map = {}
+            for r in pool:
+                code = r.get("场次编号", "")
+                vs = r.get("对阵", "")
+                if play_type == "混合":
+                    pick = (r.get("胜平负推荐", "") or r.get("让球推荐", "")
+                            or r.get("比分推荐", ""))
+                else:
+                    pick = r.get(f"{play_type}推荐", "")
+                odds_map = r.get("真实赔率", {}) or {}
+                odds = odds_map.get(pick, "")
+                try:
+                    odds_str = f"{float(odds):.2f}" if odds else "—"
+                except (ValueError, TypeError):
+                    odds_str = "—"
+                label = f"{code} {vs} → {pick} @ {odds_str}"
+                options_map[label] = r
+
+            selected_labels = st.multiselect(
+                "勾选参与串关的比赛",
+                options=list(options_map.keys()),
+                key="parlay_selected",
+            )
+            selected = [options_map[l] for l in selected_labels]
+
+            # --- 校验 ---
+            if len(selected) < parlay_n:
+                st.warning(f"已选 {len(selected)} 场，需要 {parlay_n} 场才能组成 {parlay_n}串1")
+            elif len(selected) > parlay_n:
+                st.info(f"已选 {len(selected)} 场，默认取前 {parlay_n} 场；或勾选下方用全部 {len(selected)} 场")
+                use_all = st.checkbox(
+                    f"用全部 {len(selected)} 场组成 {len(selected)}串1",
+                    value=False,
+                    key="parlay_use_all",
+                )
+                if use_all:
+                    parlay_n = len(selected)
+
+            # --- 实时计算 ---
+            if len(selected) >= 2:
+                combo = selected[:parlay_n] if len(selected) >= parlay_n else selected
+                total_odds = 1.0
+                picks_display = []
+                for r in combo:
+                    code = r.get("场次编号", "")
+                    vs = r.get("对阵", "")
+                    if play_type == "混合":
+                        pick = (r.get("胜平负推荐", "") or r.get("让球推荐", "")
+                                or r.get("比分推荐", ""))
+                    else:
+                        pick = r.get(f"{play_type}推荐", "")
+                    odds_map = r.get("真实赔率", {}) or {}
+                    o = odds_map.get(pick, "")
+                    try:
+                        total_odds *= float(o)
+                    except Exception:
+                        pass
+                    picks_display.append(f"{code} {vs} → {pick} @ {o}")
+
+                st.divider()
+                st.markdown(f"**📊 已选 {len(combo)} 场，组成 {len(combo)}串1**")
+                for line in picks_display:
+                    st.markdown(f"- {line}")
+
+                c1, c2 = st.columns(2)
+                with c1:
+                    stake = st.number_input(
+                        "投入（元）", min_value=2, max_value=10000,
+                        value=10, step=1, key="parlay_stake",
+                    )
+                with c2:
+                    st.metric("总赔率", f"{total_odds:.2f}")
+
+                c3, c4 = st.columns(2)
+                with c3:
+                    st.metric("预期收益", f"{total_odds * stake:.2f} 元")
+                with c4:
+                    st.metric("潜在盈利", f"{total_odds * stake - stake:.2f} 元")
+
+                # --- 生成串关投注单 ---
+                if st.button("📋 生成串关投注单", key="gen_parlay"):
+                    slip = f"⚽ {len(combo)}串1 串关推荐\n"
+                    slip += "─" * 30 + "\n"
+                    for line in picks_display:
+                        slip += line + "\n"
+                    slip += "─" * 30 + "\n"
+                    slip += f"总赔率：{total_odds:.2f}\n"
+                    slip += f"投入：{stake} 元\n"
+                    slip += f"预期收益：{total_odds * stake:.2f} 元\n"
+
+                    from modules.copy_widget import copy_block
+                    copy_block(slip, label="📋 复制串关投注单",
+                               height=340, key="parlay_result")
+
+            st.divider()
+
+            # --- 单场投注单 ---
+            st.markdown("### 📋 单场投注单")
+            from modules.betting_slip import generate_slip
+            watch_teams_t = st.session_state.get("watch_teams", [])
+            watch_leagues_t = st.session_state.get("watch_leagues", [])
+            only_cold_t = st.session_state.get("only_cold", False)
+            filtered_t = _f(results_p, teams=set(watch_teams_t),
+                            leagues=set(watch_leagues_t), only_cold=only_cold_t)
+            slip_text = generate_slip(filtered_t, mode="single")
+
+            from modules.copy_widget import copy_block
+            copy_block(slip_text, label="📋 复制单场投注单",
+                       height=380, key="parlay_single_slip")
+
+            st.divider()
+
+            # --- Markdown + CSV 报告 ---
+            st.markdown("### 📄 报告下载")
+            import glob, os as _os
+            md_files = sorted(glob.glob("output/recommend_*.md"),
+                              key=_os.path.getmtime, reverse=True)
+            csv_files_p = sorted(glob.glob("output/recommend_*.csv"),
+                                 key=_os.path.getmtime, reverse=True)
+
+            col_md, col_csv = st.columns(2)
+            with col_md:
+                st.caption("📋 Markdown 报告")
+                if md_files:
+                    with open(md_files[0], encoding="utf-8") as f:
+                        md_text = f.read()
+                    copy_block(md_text, label="📋 复制 Markdown",
+                               height=500, key="parlay_md")
+                else:
+                    st.info("无 Markdown 文件")
+
+            with col_csv:
+                st.caption("📋 CSV 数据")
+                if csv_files_p:
+                    with open(csv_files_p[0], encoding="utf-8-sig") as f:
+                        csv_text = f.read()
+                    copy_block(csv_text, label="📋 复制 CSV",
+                               height=500, key="parlay_csv")
+                else:
+                    st.info("无 CSV 文件")
 
     with tab_hist:
         st.subheader("📅 最近 10 天历史报告")
@@ -464,40 +631,4 @@ else:
             else:
                 st.error(f"❌ 结算失败，返回码 {result.returncode}")
 
-    # 串关
-    st.markdown("---")
-    st.subheader("🎯 串关推荐")
-    if parlay_files:
-        from modules.copy_widget import copy_block
-        for i, pf in enumerate(parlay_files[:6]):
-            with open(pf, "r", encoding="utf-8") as f:
-                content = f.read()
-            name = os.path.basename(pf)
-            st.caption(f"📄 {name}")
-            copy_block(
-                content,
-                label=f"📋 复制 {name}",
-                height=400,
-                key=f"parlay_file_{i}",
-            )
-            st.divider()
-    else:
-        st.info("暂无串关推荐（可能置信度不足）")
-
-    # 🎯 全部换成 st.code() 原生复制（download_button 在本 Streamlit 版本下不触发）
-    st.markdown("---")
-    col1, col2 = st.columns(2)
-    with col1:
-        if latest_md:
-            with open(latest_md, encoding="utf-8") as f:
-                md_content = f.read()
-            st.markdown("**📋 Markdown 报告（点右上角复制）**")
-            with st.expander("展开查看", expanded=False):
-                st.code(md_content, language="markdown")
-    with col2:
-        if csv_files:
-            with open(csv_files[0], encoding="utf-8-sig") as f:
-                csv_content = f.read()
-            st.markdown("**📋 CSV 数据（点右上角复制）**")
-            with st.expander("展开查看", expanded=False):
-                st.code(csv_content, language=None)
+    # （底部串关 + MD/CSV 已迁移到 🔗串关 Tab）
