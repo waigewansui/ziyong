@@ -1034,9 +1034,28 @@ def analyze_match(match: Dict, history: Dict, intel: Dict,
                     key=lambda x: x[1])
     score_str = top_score[0]
 
-    # 让球推荐 = 完整比分概率矩阵精确计算（λ 泊松 → adjusted 净胜球 → 让胜/让平/让负）
+# 让球推荐 = 完整比分概率矩阵精确计算（λ 泊松 → adjusted 净胜球 → 让胜/让平/让负）
     handicap_prob = calc_handicap_from_score_matrix(full_matrix, handicap)
-    handicap_pick = max(handicap_prob, key=handicap_prob.get)
+
+    # ✅ 市场赔率优先：体彩让球赔率隐含概率通常比模型更准
+    hhad_odds = _parse_hhad_odds(match)
+    if hhad_odds and all(hhad_odds.get(k, 0) > 0 for k in ("让胜", "让平", "让负")):
+        try:
+            inv_h = 1.0 / hhad_odds["让胜"]
+            inv_d = 1.0 / hhad_odds["让平"]
+            inv_a = 1.0 / hhad_odds["让负"]
+            s = inv_h + inv_d + inv_a
+            market_prob = {
+                "让胜": round(inv_h / s, 4),
+                "让平": round(inv_d / s, 4),
+                "让负": round(inv_a / s, 4),
+            }
+            handicap_pick = max(market_prob, key=market_prob.get)
+            handicap_prob = market_prob   # 概率也覆盖，展示一致
+        except Exception:
+            handicap_pick = max(handicap_prob, key=handicap_prob.get)
+    else:
+        handicap_pick = max(handicap_prob, key=handicap_prob.get)
     total_pick = derive_total_from_score(score_str)
     hf_pick = derive_half_full_from_score(score_str, wdl["推荐"])
     total_prob = calc_total_goals(history, home=home, away=away, league=league,
