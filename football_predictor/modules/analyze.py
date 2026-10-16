@@ -560,20 +560,48 @@ def _detect_draw_signal(hp, ip, op, history) -> bool:
 
 # ========== 让球 ==========
 def calc_handicap(wdl: Dict, handicap: float) -> Dict:
+    """
+    让球盘口 → 让胜/让平/让负 概率
+
+    语义：
+    - handicap < 0（主队让球）：让胜=赢2+，让平=赢1，让负=平/负
+    - handicap > 0（主队受让）：让胜=不败，让平=输1，让负=输2+
+    - handicap = 0：直接返回胜平负
+    """
     h, d, a = wdl["胜"], wdl["平"], wdl["负"]
+    hc = abs(handicap)
+
+    # 让球越大，"刚好赢/输 N 球"越难，中间档越窄
+    if hc <= 1.0:
+        mid_ratio = 0.55
+    elif hc <= 2.0:
+        mid_ratio = 0.35
+    else:
+        mid_ratio = 0.15
+
     if handicap < 0:
-        return {
-            "让胜": round(h*0.50, 4),
-            "让平": round(h*0.30 + d*0.20, 4),
-            "让负": round(h*0.20 + d*0.80 + a, 4),
+        result = {
+            "让胜": h * (1 - mid_ratio),   # 赢2+ 及更多
+            "让平": h * mid_ratio,          # 恰好赢1
+            "让负": d + a,                  # 平局 + 客胜 = 让负
         }
     elif handicap > 0:
-        return {
-            "让胜": round(h + d*0.50, 4),
-            "让平": round(d*0.30 + a*0.30, 4),
-            "让负": round(a*0.70, 4),
+        result = {
+            "让胜": h + d,                  # 主队不败
+            "让平": a * mid_ratio,          # 恰好输1
+            "让负": a * (1 - mid_ratio),    # 输2+ 及更多
         }
-    return {"让胜": h, "让平": d, "让负": a}
+    else:
+        result = {"让胜": h, "让平": d, "让负": a}
+
+    # 归一化
+    total = sum(result.values())
+    if total > 0 and abs(total - 1.0) > 0.001:
+        result = {k: round(v / total, 4) for k, v in result.items()}
+    else:
+        result = {k: round(v, 4) for k, v in result.items()}
+
+    return result
 
 
 # ========== 让球推断 ==========
