@@ -561,47 +561,55 @@ def _detect_draw_signal(hp, ip, op, history) -> bool:
 # ========== 让球 ==========
 def calc_handicap(wdl: Dict, handicap: float) -> Dict:
     """
-    让球盘口 → 让胜/让平/让负 概率
-
-    语义：
-    - handicap < 0（主队让球）：让胜=赢2+，让平=赢1，让负=平/负
-    - handicap > 0（主队受让）：让胜=不败，让平=输1，让负=输2+
-    - handicap = 0：直接返回胜平负
+    旧的启发式让球计算 — 保留给无 score_prob 时的兜底。
+    优先使用 calc_handicap_from_score_matrix（精确泊松）。
     """
     h, d, a = wdl["胜"], wdl["平"], wdl["负"]
-    hc = abs(handicap)
+    if handicap == 0:
+        return {"让胜": round(h, 4), "让平": round(d, 4), "让负": round(a, 4)}
 
-    # 让球越大，"刚好赢/输 N 球"越难，中间档越窄
-    if hc <= 1.0:
-        mid_ratio = 0.40
-    elif hc <= 2.0:
-        mid_ratio = 0.25
-    else:
-        mid_ratio = 0.10
+    # 粗略 fallback
+    return {"让胜": round(h, 4), "让平": round(d, 4), "让负": round(a, 4)}
 
-    if handicap < 0:
-        result = {
-            "让胜": h * (1 - mid_ratio),   # 赢2+ 及更多
-            "让平": h * mid_ratio,          # 恰好赢1
-            "让负": d + a,                  # 平局 + 客胜 = 让负
+
+def calc_handicap_from_score_matrix(score_prob: Dict, handicap: float) -> Dict:
+    """
+    用已算好的比分概率矩阵（来自 λ 泊松分布）精确计算让球三档概率
+    
+    语义：让球后主队净胜球 = (主队进球 - 客队进球) + handicap
+      adjusted > 0 → 让胜
+      adjusted == 0 → 让平
+      adjusted < 0 → 让负
+      
+    让平会自然在中主场景（λ_h≈1.5, λ_a≈1.0）出现，
+    强主（λ_h>>λ_a）时让胜主导，弱主时让负主导。
+    """
+    p_win = p_draw = p_lose = 0.0
+    for score, p in score_prob.items():
+        if ":" not in score:
+            continue
+        try:
+            h, a = score.split(":")
+            h, a = int(h), int(a)
+        except ValueError:
+            continue
+        adjusted = (h - a) + handicap
+        if adjusted > 0:
+            p_win += p
+        elif adjusted == 0:
+            p_draw += p
+        else:
+            p_lose += p
+    
+    total = p_win + p_draw + p_lose
+    if total > 0:
+        return {
+            "让胜": round(p_win / total, 4),
+            "让平": round(p_draw / total, 4),
+            "让负": round(p_lose / total, 4),
         }
-    elif handicap > 0:
-        result = {
-            "让胜": h + d,                  # 主队不败
-            "让平": a * mid_ratio,          # 恰好输1
-            "让负": a * (1 - mid_ratio),    # 输2+ 及更多
-        }
     else:
-        result = {"让胜": h, "让平": d, "让负": a}
-
-    # 归一化
-    total = sum(result.values())
-    if total > 0 and abs(total - 1.0) > 0.001:
-        result = {k: round(v / total, 4) for k, v in result.items()}
-    else:
-        result = {k: round(v, 4) for k, v in result.items()}
-
-    return result
+        return {"让胜": 0.3333, "让平": 0.3333, "让负": 0.3333}
 
 
 # ========== 让球推断 ==========
@@ -795,6 +803,8 @@ def calc_score(history: Dict, home: str = "", away: str = "",
 
     data_quality = "完整" if (h_goals and a_goals) else "部分兜底"
     filtered["__data_quality__"] = data_quality
+    # 保留完整 7×7 泊松矩阵给让球计算（不受 wdl_recommendation 过滤影响）
+    filtered["__full_matrix__"] = {k: v for k, v in result.items()}
 
     logger.info(
         f"  λ_h={lam_h:.2f} λ_a={lam_a:.2f} | "
@@ -963,12 +973,13 @@ def analyze_match(match: Dict, history: Dict, intel: Dict,
                              wdl_recommendation=wdl["推荐"],
                              weather=weather, referee=referee)
     data_quality = score_prob.pop("__data_quality__", "未知")
+    full_matrix = score_prob.pop("__full_matrix__", score_prob)  # 完整泊松矩阵给让球用
     top_score = max((kv for kv in score_prob.items() if kv[0].count(":") == 1),
                     key=lambda x: x[1])
     score_str = top_score[0]
 
-    # 让球推荐 = calc_handicap 的概率 argmax（不再从比分反推）
-    handicap_prob = calc_handicap(wdl, handicap)
+    # 让球推荐 = 完整比分概率矩阵精确计算（λ 泊松 → adjusted 净胜球 → 让胜/让平/让负）
+    handicap_prob = calc_handicap_from_score_matrix(full_matrix, handicap)
     handicap_pick = max(handicap_prob, key=handicap_prob.get)
     total_pick = derive_total_from_score(score_str)
     hf_pick = derive_half_full_from_score(score_str, wdl["推荐"])
