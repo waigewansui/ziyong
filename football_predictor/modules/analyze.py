@@ -17,6 +17,62 @@ from modules.team_name_resolver import get_resolver
 logger = logging.getLogger(__name__)
 
 
+# ============================================================
+# 从 learned.yaml 加载真实参数（带语义转换）
+# ============================================================
+import os as _os
+import yaml as _yaml
+
+_LEARNED = None
+
+
+def _load_learned():
+    global _LEARNED
+    if _LEARNED is not None:
+        return _LEARNED
+    _p = _os.path.join(
+        _os.path.dirname(_os.path.abspath(__file__)),
+        "..", "config", "learned.yaml"
+    )
+    if _os.path.exists(_p):
+        try:
+            with open(_p, encoding="utf-8") as _f:
+                _LEARNED = _yaml.safe_load(_f) or {}
+        except Exception:
+            _LEARNED = {}
+    else:
+        _LEARNED = {}
+    return _LEARNED
+
+
+def get_league_avg_goals(league: str) -> float:
+    """
+    语义转换：learned.yaml 存的是【双方合计】，硬编码是【单队】
+    """
+    learned = _load_learned()
+    lg_map = learned.get("联赛统计", {}) or {}
+    norm = normalize_league(league)
+    if norm in lg_map:
+        return lg_map[norm]["场均进球"] / 2.0   # 除以 2
+    return LEAGUE_AVG_GOALS.get(norm, DEFAULT_LEAGUE_AVG)
+
+
+def get_home_advantage(league: str) -> float:
+    """
+    语义转换：learned.yaml 存的是【主胜率 0~1】，硬编码是【倍数 ~1.0】
+    近似公式：home_adv ≈ 1.0 + (H - 0.38) × 2.0
+    基准 0.38 是主客对称时的泊松主胜率
+    """
+    learned = _load_learned()
+    lg_map = learned.get("联赛统计", {}) or {}
+    norm = normalize_league(league)
+    if norm in lg_map:
+        H = lg_map[norm].get("主胜率", 0.365)
+        adv = 1.0 + (H - 0.365) * 2.0
+        return max(0.95, min(1.50, adv))   # 夹在合理区间
+    return HOME_ADVANTAGE.get(norm, DEFAULT_HOME_ADV)
+
+
 # ========== 方向4：联赛细分权重 ==========
 DEFAULT_WEIGHTS = {"history": 0.40, "intel": 0.30, "odds": 0.30}
 
@@ -746,8 +802,8 @@ def calc_score(history: Dict, home: str = "", away: str = "",
     away_defense = mean(a_conceded, 1.5)
 
     league_norm = normalize_league(league)
-    league_avg = LEAGUE_AVG_GOALS.get(league_norm, DEFAULT_LEAGUE_AVG)
-    home_adv = HOME_ADVANTAGE.get(league_norm, DEFAULT_HOME_ADV)
+    league_avg = get_league_avg_goals(league)
+    home_adv = get_home_advantage(league)
 
     # L1：对手防守强度交叉 + 主场优势
     lam_h_raw = home_attack * (away_defense / league_avg) * home_adv
@@ -856,8 +912,8 @@ def calc_total_goals(history: Dict, home: str = "", away: str = "",
     away_defense = mean(a_conceded, 1.5)
 
     league_norm = normalize_league(league)
-    league_avg = LEAGUE_AVG_GOALS.get(league_norm, DEFAULT_LEAGUE_AVG)
-    home_adv = HOME_ADVANTAGE.get(league_norm, DEFAULT_HOME_ADV)
+    league_avg = get_league_avg_goals(league)
+    home_adv = get_home_advantage(league)
 
     lam_h_raw = home_attack * (away_defense / league_avg) * home_adv
     lam_a_raw = away_attack * (home_defense / league_avg) * (2 - home_adv) * 0.95

@@ -33,3 +33,21 @@ data/today.txt
 # === OS ===
 .DS_Store
 Thumbs.db
+# 数据文件（本地可重生）
+data/sporttery_history/
+data/predictions/
+data/results/
+data/dongqiudi_history/
+data/learned/
+
+# 临时文件
+temp_*.py
+*.tmp
+新建*.txt
+
+# Python
+__pycache__/
+*.pyc
+
+# 独立项目
+SportteryAPI/

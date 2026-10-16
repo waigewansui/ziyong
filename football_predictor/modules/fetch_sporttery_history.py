@@ -70,6 +70,7 @@ def fetch_range(date_from: str, date_to: str,
     """抓指定日期范围的赛果（自动翻页）"""
     all_matches = []
     page_no = 1
+    prev_match_nums = []
 
     while page_no <= max_pages:
         params = {
@@ -97,15 +98,24 @@ def fetch_range(date_from: str, date_to: str,
         match_list = value.get("matchResult") or []
 
         page_count = 0
+        page_match_nums = []
         for sm in match_list:
             all_matches.append(_extract_match(sm, date_from))
+            page_match_nums.append(sm.get("matchNumStr", ""))
             page_count += 1
 
         logger.info(f"  P{page_no}: {page_count} 场")
 
-        # 翻页判断：本页不足 pageSize 说明到底了
+        # 翻页判断
         if page_count < 30:
             break
+
+        # 如果连续两页返回完全相同的场次列表（API 不翻页），说明到底了
+        if page_no >= 2 and set(page_match_nums) == set(prev_match_nums or []):
+            logger.info(f"  API 不再翻页（连续重复），提前结束")
+            break
+        prev_match_nums = page_match_nums
+
         page_no += 1
 
     return all_matches
