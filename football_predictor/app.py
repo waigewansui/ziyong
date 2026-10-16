@@ -350,7 +350,7 @@ else:
             st.caption(f"过滤后 {len(filtered)} 场（原始 {len(results_latest)} 场）")
 
             from modules.ui_cards import render_match_cards
-            render_match_cards(filtered, columns=5)
+            render_match_cards(filtered, columns=6)
     with tab_hd:
         st.dataframe(build_table("让球推荐", "让球概率", "真实赔率_让球"),
                      use_container_width=True, hide_index=True)
